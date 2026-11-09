@@ -9,7 +9,8 @@ import {
   getDocs, 
   runTransaction 
 } from "firebase/firestore";
-import { db } from "@/config/firebase";
+import { httpsCallable } from "firebase/functions";
+import { db, functions } from "@/config/firebase";
 import { 
   ResearchRequest, 
   ResearchRequestStatus, 
@@ -188,6 +189,21 @@ export const researchService = {
    * Submit Quote by Admin
    */
   async submitQuote(requestId: string, amount: number, notes: string, adminProfile: UserProfile): Promise<void> {
+    try {
+      const fn = httpsCallable(functions, "submitresearchquote");
+      await fn({ requestId, amount, notes });
+      await auditService.logActivity(requestId, {
+        type: "status_change",
+        actorId: adminProfile.uid,
+        actorName: adminProfile.displayName,
+        actorRole: "admin",
+        message: `Admin issued research quote: K${amount} (Notes: ${notes})`
+      });
+      return;
+    } catch (fnErr) {
+      console.warn("Cloud function 'submitresearchquote' failed, attempting direct update fallback:", fnErr);
+    }
+
     const docRef = doc(db, RESEARCH_COLLECTION, requestId);
     const timestamp = new Date().toISOString();
 
@@ -219,11 +235,25 @@ export const researchService = {
    * Student Accepts or Rejects Quote
    */
   async handleQuoteDecision(requestId: string, accepted: boolean, studentProfile: UserProfile): Promise<void> {
+    const quoteStatus = accepted ? "accepted" : "rejected";
+    try {
+      const fn = httpsCallable(functions, "respondresearchquote");
+      await fn({ requestId, accepted });
+      await auditService.logActivity(requestId, {
+        type: "status_change",
+        actorId: studentProfile.uid,
+        actorName: studentProfile.displayName,
+        actorRole: "customer",
+        message: `Student ${quoteStatus} the administration quote.`
+      });
+      return;
+    } catch (fnErr) {
+      console.warn("Cloud function 'respondresearchquote' failed, attempting direct update fallback:", fnErr);
+    }
+
     const docRef = doc(db, RESEARCH_COLLECTION, requestId);
     const timestamp = new Date().toISOString();
-
     const nextStatus: ResearchRequestStatus = accepted ? "awaiting_payment" : "submitted";
-    const quoteStatus = accepted ? "accepted" : "rejected";
 
     try {
       await updateDoc(docRef, {
@@ -249,13 +279,29 @@ export const researchService = {
    * Complete Escrow Payment (Student)
    */
   async completeEscrowPayment(requestId: string, studentProfile: UserProfile): Promise<void> {
+    try {
+      const fn = httpsCallable(functions, "fundresearchrequest");
+      await fn({ requestId });
+      await auditService.logActivity(requestId, {
+        type: "status_change",
+        actorId: studentProfile.uid,
+        actorName: studentProfile.displayName,
+        actorRole: "customer",
+        message: `Escrow payment successfully loaded and funded for research request ${requestId}.`
+      });
+      return;
+    } catch (fnErr) {
+      console.warn("Cloud function 'fundresearchrequest' failed, attempting direct update fallback:", fnErr);
+    }
+
     const docRef = doc(db, RESEARCH_COLLECTION, requestId);
     const timestamp = new Date().toISOString();
 
     try {
       await updateDoc(docRef, {
         status: "funded",
-        "quoteStatus": "paid",
+        quoteStatus: "paid",
+        paymentStatus: "paid",
         updatedAt: timestamp
       });
 
@@ -276,6 +322,21 @@ export const researchService = {
    * Assign Writer (Admin)
    */
   async assignWriter(requestId: string, writerId: string, adminProfile: UserProfile): Promise<void> {
+    try {
+      const fn = httpsCallable(functions, "assignresearchwriter");
+      await fn({ requestId, writerId });
+      await auditService.logActivity(requestId, {
+        type: "status_change",
+        actorId: adminProfile.uid,
+        actorName: adminProfile.displayName,
+        actorRole: "admin",
+        message: `Admin assigned research request ${requestId} to Expert writer.`
+      });
+      return;
+    } catch (fnErr) {
+      console.warn("Cloud function 'assignresearchwriter' failed, attempting direct update fallback:", fnErr);
+    }
+
     const docRef = doc(db, RESEARCH_COLLECTION, requestId);
     const timestamp = new Date().toISOString();
 

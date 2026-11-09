@@ -2,6 +2,7 @@ import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
+import { getFunctions } from "firebase/functions";
 import { getMessaging, Messaging } from "firebase/messaging";
 
 const firebaseConfig = {
@@ -19,6 +20,7 @@ const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 const auth = getAuth(app);
 const db = getFirestore(app);
 const storage = getStorage(app);
+const functions = getFunctions(app);
 
 // Messaging is client-only (browser environment)
 let messaging: Messaging | null = null;
@@ -30,4 +32,4 @@ if (typeof window !== "undefined") {
   }
 }
 
-export { app, auth, db, storage, messaging };
+export { app, auth, db, storage, functions, messaging };

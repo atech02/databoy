@@ -1,9 +1,50 @@
 import { doc, getDoc, setDoc, updateDoc, collection, query, where, getDocs } from "firebase/firestore";
-import { db } from "@/config/firebase";
+import { httpsCallable } from "firebase/functions";
+import { db, functions } from "@/config/firebase";
 import { UserProfile, UserStatus, UserAvailability, VerificationStatus } from "@/types/domain";
 import { validateUserProfile } from "@/utils/validation";
 
 const USERS_COLLECTION = "users";
+
+/**
+ * Normalizes user profile data in-memory without persisting to Firestore.
+ * Ensures legacy accounts with missing fields render smoothly and cleanly
+ * without triggering unauthorized client-side writes to protected fields.
+ */
+export function normalizeUserProfile(raw: any): UserProfile {
+  const user = { ...raw } as UserProfile;
+
+  const vStatus = user.verificationStatus as string | undefined;
+  if (vStatus === "verified" || vStatus === "approved") {
+    user.verificationStatus = "approved";
+    user.writerStatus = "active";
+    user.isVerifiedWriter = true;
+  } else if (vStatus === "pending" || vStatus === "pending_review") {
+    user.verificationStatus = "pending_review";
+    user.writerStatus = "inactive";
+    user.isVerifiedWriter = false;
+  } else {
+    user.verificationStatus = (vStatus === "incomplete" || vStatus === "clarification_required" || vStatus === "rejected")
+      ? vStatus
+      : "draft";
+    user.writerStatus = "inactive";
+    user.isVerifiedWriter = false;
+  }
+
+  user.competencies = user.competencies ?? (user.academic?.specializations || []);
+  user.subjectExpertise = user.subjectExpertise ?? (user.academic?.specializations || []);
+  user.degreeLevel = user.degreeLevel ?? (user.academic?.yearOfStudy || "");
+  user.yearsOfExperience = user.yearsOfExperience ?? 0;
+  user.preferredWorkload = user.preferredWorkload ?? 5;
+  user.averageRating = user.averageRating ?? (user.reputation || 0);
+  user.activeTaskCount = user.activeTaskCount ?? 0;
+  user.completedAssignments = user.completedAssignments ?? (user.completedCount || 0);
+  user.disputeCount = user.disputeCount ?? 0;
+  user.revisionCount = user.revisionCount ?? 0;
+  user.reputation = user.reputation ?? 0;
+
+  return user;
+}
 
 export const userService = {
   /**
@@ -17,111 +58,8 @@ export const userService = {
 
       if (docSnap.exists()) {
         console.log(`[QUERY_SUCCESS] collection: ${USERS_COLLECTION} | operation: get | path: ${USERS_COLLECTION}/${uid} | exists: true`);
-        const user = docSnap.data() as UserProfile;
-        let modified = false;
-
-        // Auto-migration & standardisation (Revision 1 & Issue 1 & 3)
-        const vStatus = user.verificationStatus as string | undefined;
-        if (vStatus === "verified" || vStatus === "approved") {
-          if (user.verificationStatus !== "approved" || user.writerStatus !== "active" || user.isVerifiedWriter !== true) {
-            user.verificationStatus = "approved";
-            user.writerStatus = "active";
-            user.isVerifiedWriter = true;
-            modified = true;
-          }
-        } else if (vStatus === "pending" || vStatus === "pending_review") {
-          if (user.verificationStatus !== "pending_review" || user.writerStatus !== "inactive" || user.isVerifiedWriter !== false) {
-            user.verificationStatus = "pending_review";
-            user.writerStatus = "inactive";
-            user.isVerifiedWriter = false;
-            modified = true;
-          }
-        } else {
-          // draft, incomplete, unverified, clarification_required, rejected, null, undefined
-          const targetStatus: any = (vStatus === "unverified" || !vStatus) 
-            ? "draft" 
-            : (vStatus === "incomplete" || vStatus === "clarification_required" || vStatus === "rejected" || vStatus === "draft")
-            ? vStatus
-            : "draft";
-
-          if (user.verificationStatus !== targetStatus || user.writerStatus !== "inactive" || user.isVerifiedWriter !== false) {
-            user.verificationStatus = targetStatus;
-            user.writerStatus = "inactive";
-            user.isVerifiedWriter = false;
-            modified = true;
-          }
-        }
-
-        // Initialize future-matching fields if missing (Revision 6)
-        if (user.competencies === undefined) {
-          user.competencies = user.academic?.specializations || [];
-          modified = true;
-        }
-        if (user.subjectExpertise === undefined) {
-          user.subjectExpertise = user.academic?.specializations || [];
-          modified = true;
-        }
-        if (user.degreeLevel === undefined) {
-          user.degreeLevel = user.academic?.yearOfStudy || "";
-          modified = true;
-        }
-        if (user.yearsOfExperience === undefined) {
-          user.yearsOfExperience = 0;
-          modified = true;
-        }
-        if (user.preferredWorkload === undefined) {
-          user.preferredWorkload = 5;
-          modified = true;
-        }
-        if (user.averageRating === undefined) {
-          user.averageRating = user.reputation || 0;
-          modified = true;
-        }
-        if (user.activeTaskCount === undefined) {
-          user.activeTaskCount = 0;
-          modified = true;
-        }
-        if (user.completedAssignments === undefined) {
-          user.completedAssignments = user.completedCount || 0;
-          modified = true;
-        }
-        if (user.disputeCount === undefined) {
-          user.disputeCount = 0;
-          modified = true;
-        }
-        if (user.revisionCount === undefined) {
-          user.revisionCount = 0;
-          modified = true;
-        }
-
-        // Initialize reputation properly (Revision 6)
-        if (user.reputation === undefined) {
-          user.reputation = 0;
-          modified = true;
-        }
-
-        if (modified) {
-          // Save updated profile back to database asynchronously
-          updateDoc(docRef, {
-            verificationStatus: user.verificationStatus,
-            writerStatus: user.writerStatus,
-            isVerifiedWriter: user.isVerifiedWriter,
-            competencies: user.competencies,
-            subjectExpertise: user.subjectExpertise,
-            degreeLevel: user.degreeLevel,
-            yearsOfExperience: user.yearsOfExperience,
-            preferredWorkload: user.preferredWorkload,
-            averageRating: user.averageRating,
-            activeTaskCount: user.activeTaskCount,
-            completedAssignments: user.completedAssignments,
-            disputeCount: user.disputeCount,
-            revisionCount: user.revisionCount,
-            reputation: user.reputation,
-            updatedAt: new Date().toISOString()
-          }).catch(err => console.error("Profile auto-migration failed:", err));
-        }
-
-        return user;
+        // Pure in-memory normalization: do not perform client-side writes to protected fields
+        return normalizeUserProfile(docSnap.data());
       }
       console.log(`[QUERY_SUCCESS] collection: ${USERS_COLLECTION} | operation: get | path: ${USERS_COLLECTION}/${uid} | exists: false`);
       return null;
@@ -197,6 +135,16 @@ export const userService = {
    * Toggles active/suspended state of a user (Admin restricted capability)
    */
   async toggleUserStatus(uid: string, status: UserStatus): Promise<void> {
+    if (status === "suspended") {
+      try {
+        const fn = httpsCallable(functions, "adminsuspenduser");
+        await fn({ targetUid: uid, reason: "Administrative suspension" });
+        return;
+      } catch (fnErr) {
+        console.warn("Cloud function 'adminsuspenduser' failed, attempting direct update fallback:", fnErr);
+      }
+    }
+
     try {
       const docRef = doc(db, USERS_COLLECTION, uid);
       await updateDoc(docRef, {
@@ -237,6 +185,14 @@ export const userService = {
    * Approves academic credentials, enabling expert dashboard access (Revision 1 & 7)
    */
   async approveVerification(uid: string, adminProfile: UserProfile): Promise<void> {
+    try {
+      const fn = httpsCallable(functions, "adminapprovewriter");
+      await fn({ targetUid: uid });
+      return;
+    } catch (fnErr) {
+      console.warn("Cloud function 'adminapprovewriter' failed, attempting direct update fallback:", fnErr);
+    }
+
     try {
       const docRef = doc(db, USERS_COLLECTION, uid);
       const docSnap = await getDoc(docRef);

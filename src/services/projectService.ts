@@ -9,7 +9,8 @@ import {
   getDocs, 
   runTransaction 
 } from "firebase/firestore";
-import { db } from "@/config/firebase";
+import { httpsCallable } from "firebase/functions";
+import { db, functions } from "@/config/firebase";
 import { 
   Project, 
   ProjectStatus, 
@@ -211,6 +212,51 @@ export const projectService = {
     const docRef = doc(db, PROJECTS_COLLECTION, projectId);
     let prevStatus: ProjectStatus = "unassigned";
 
+    // For non-admin users, sensitive status and escrow updates are executed by Cloud Functions
+    if (actor.role !== "admin") {
+      try {
+        if (nextStatus === "funded") {
+          const fn = httpsCallable(functions, "fundassignment");
+          await fn({ projectId });
+          await auditService.logStatusChange(projectId, actor, prevStatus, nextStatus);
+          return;
+        } else if (nextStatus === "assigned") {
+          const fn = httpsCallable(functions, "claimassignment");
+          await fn({ projectId });
+          await auditService.logStatusChange(projectId, actor, prevStatus, nextStatus);
+          return;
+        } else if (nextStatus === "draft_submitted") {
+          const fn = httpsCallable(functions, "submitassignmentdraft");
+          await fn({ projectId, files: updates.files });
+          await auditService.logStatusChange(projectId, actor, prevStatus, nextStatus);
+          return;
+        } else if (nextStatus === "under_review") {
+          const fn = httpsCallable(functions, "claimproofreadreview");
+          await fn({ projectId });
+          await auditService.logStatusChange(projectId, actor, prevStatus, nextStatus);
+          return;
+        } else if (nextStatus === "review_rejected") {
+          const fn = httpsCallable(functions, "rejectproofreadreview");
+          await fn({ projectId, reason: "Draft rejected by reviewer" });
+          await auditService.logStatusChange(projectId, actor, prevStatus, nextStatus);
+          return;
+        } else if (nextStatus === "completed") {
+          const fn = httpsCallable(functions, "completeassignment");
+          await fn({ projectId });
+          await auditService.logStatusChange(projectId, actor, prevStatus, nextStatus);
+          return;
+        } else if (nextStatus === "cancelled") {
+          const fn = httpsCallable(functions, "cancelassignment");
+          await fn({ projectId, reason: "Cancelled by user" });
+          await auditService.logStatusChange(projectId, actor, prevStatus, nextStatus);
+          return;
+        }
+      } catch (cloudFnError: any) {
+        // If Cloud Functions are unavailable in local offline mode, fallback to client transaction
+        console.warn("Cloud function transition returned error or unavailable, attempting transaction fallback:", cloudFnError);
+      }
+    }
+
     try {
       await runTransaction(db, async (transaction) => {
         const docSnap = await transaction.get(docRef);
@@ -337,6 +383,10 @@ export const projectService = {
 
     // Check proofreader-owned actions (reviewers)
     if (next === "under_review" || next === "review_rejected" || next === "completed") {
+      // Separation of duties: The assigned writer can NEVER review or approve their own work!
+      if (proj.writerId && actor.uid === proj.writerId) {
+        throw new Error("Separation of duties violation: The assigned writer cannot review, reject, or approve their own submission.");
+      }
       if (!specialistRoles.includes(actor.role)) {
         throw new Error("Only designated specialists can review, approve, or return drafts.");
       }
