@@ -1,0 +1,257 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // -----------------------------------------------------------------------
+    // AUTH HELPERS
+    // -----------------------------------------------------------------------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // BUG 1 FIX — null-safe profile lookup.
+    // On first login, createUserProfile() may not have committed before the rules
+    // engine evaluates hasRole(). get() on a non-existent document returns a
+    // non-existent snapshot whose .data is null. Accessing null.role silently
+    // produces permission-denied. exists() prevents this crash.
+    function getUserData() {
+      let userRef = /databases/$(database)/documents/users/$(request.auth.uid);
+      return exists(userRef) ? get(userRef).data : null;
+    }
+
+    // BUG 1 FIX — null-safe role check.
+    // data != null guards against the null returned by getUserData() when the
+    // profile document does not yet exist.
+    function hasRole(role) {
+      let data = getUserData();
+      return isSignedIn() && data != null && data.role == role;
+    }
+
+    function isAdmin() {
+      return hasRole('admin');
+    }
+
+    // Current specialist roles: writer, proofreader
+    function isSpecialist() {
+      let data = getUserData();
+      return isSignedIn() && data != null && (data.role == 'writer' || data.role == 'proofreader');
+    }
+
+    // Check if the specialist has passed verification
+    function isVerifiedSpecialist() {
+      let data = getUserData();
+      return isSpecialist() && 
+        data.verificationStatus == 'approved' && 
+        data.writerStatus == 'active' && 
+        data.isVerifiedWriter == true;
+    }
+
+    // Named participant check — valid only inside match /assignments/{assignmentId}
+    // where resource is bound to the current document.
+    function isParticipant() {
+      return
+        resource.data.customerId == request.auth.uid ||
+        resource.data.writerId   == request.auth.uid ||
+        resource.data.proofreaderId == request.auth.uid;
+    }
+
+    // -----------------------------------------------------------------------
+    // USERS COLLECTION
+    // -----------------------------------------------------------------------
+    match /users/{userId} {
+      // Any authenticated user can read profiles (role/rating lookups).
+      // V1 accepted — contains email/phone/credential URLs. Tighten in V2.
+      allow read: if isSignedIn();
+
+      // Self-registration: role must start as 'customer', or verificationStatus
+      // must be 'pending'/'pending_review' (specialist onboarding path).
+      allow create: if isOwner(userId) &&
+        (!request.resource.data.keys().hasAll(['role']) ||
+          request.resource.data.role == 'customer' ||
+          request.resource.data.verificationStatus in ['pending_review', 'draft', 'incomplete']) &&
+        (!request.resource.data.keys().hasAll(['status']) ||
+          request.resource.data.status == 'active');
+
+      // Users can update their own profiles.
+      // Protected fields: reputation, completedCount, writerStatus, isVerifiedWriter.
+      // Role changes: allowed only if the user has NOT completed onboarding yet.
+      // verificationStatus: users can set it to 'pending_review' or 'pending' but
+      //   cannot self-approve ('approved', 'verified').
+      // status: users cannot change their own status (active/suspended).
+      allow update: if isOwner(userId) && (
+        // Block protected admin-only metric and verification outcome fields
+        !request.resource.data.diff(resource.data).affectedKeys()
+          .hasAny(['reputation', 'completedCount', 'isVerifiedWriter', 'writerStatus']) &&
+        // Block self-status changes (active/suspended is admin-only)
+        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['status']) ||
+          request.resource.data.status == resource.data.status) &&
+        // Role changes only allowed before onboarding is complete
+        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['role']) ||
+          resource.data.isOnboarded == false) &&
+        // isOnboarded cannot be toggled back to false once true
+        (resource.data.isOnboarded == false || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isOnboarded']) || request.resource.data.isOnboarded == true) &&
+        // verificationStatus: only allow setting to non-approved status values if not already approved
+        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['verificationStatus']) ||
+          (request.resource.data.verificationStatus in ['pending_review', 'draft', 'incomplete', 'clarification_required', 'rejected'] && 
+           resource.data.verificationStatus != 'approved'))
+      );
+
+      // Admins can execute any write (approve verifications, suspend accounts).
+      allow write: if isAdmin();
+    }
+
+    // -----------------------------------------------------------------------
+    // ASSIGNMENTS COLLECTION
+    // -----------------------------------------------------------------------
+    match /assignments/{assignmentId} {
+
+      // --- SINGLE DOCUMENT READ (get) ---
+      // Strict participant access plus claimable status visibility.
+      // resource.data is fully available for single-document reads.
+      allow get: if isSignedIn() && (
+        isParticipant() ||
+        resource.data.status == 'unassigned' ||
+        (resource.data.status == 'draft_submitted' && isSpecialist()) ||
+        isAdmin()
+      );
+
+      // --- COLLECTION QUERY (list) ---
+      // IMPORTANT — "Rules are not filters" (Firebase docs).
+      // Firestore does NOT evaluate resource.data per-document during queries.
+      // It checks whether the query's WHERE clauses can statically satisfy the rule.
+      // Each permitted condition below corresponds to an exact WHERE clause the
+      // client must include for Firestore to permit the query:
+      //
+      //   isParticipant()   ← requires where("customerId/writerId/proofreaderId", "==", uid)
+      //   unassigned+writer ← requires where("status", "==", "unassigned")
+      //   draft_submitted   ← requires where("status", "==", "draft_submitted")
+      //
+      // Statuses not listed (assigned, in_progress, under_review, review_rejected,
+      // completed, disputed, cancelled) are NOT open — they require a participant
+      // filter (customerId/writerId/proofreaderId) in the query.
+      allow list: if isSignedIn() && (
+        isAdmin() ||
+        isParticipant() ||
+        (resource.data.status == 'unassigned'      && isSpecialist()) ||
+        (resource.data.status == 'draft_submitted' && isSpecialist())
+      );
+
+      // --- CREATE ---
+      // Only customers (or admins) can open project pipelines.
+      // hasRole() is now null-safe — safe to call on first-login creation.
+      allow create: if isSignedIn() && (
+        hasRole('customer') || isAdmin()
+      ) && request.resource.data.customerId == request.auth.uid;
+
+      // --- UPDATE ---
+      // Named participants always have update rights.
+      // Two "open claim" conditions allow a new specialist to attach themselves:
+      //   unassigned     → any writer can claim (sets writerId)
+      //   draft_submitted → any specialist can claim review (sets proofreaderId)
+      // Restricted to isVerifiedSpecialist() — unverified specialists and customers cannot claim tasks.
+      allow update: if isSignedIn() && (
+        isParticipant() ||
+        (resource.data.status == 'unassigned' && isVerifiedSpecialist()) ||
+        (resource.data.status == 'draft_submitted' && isVerifiedSpecialist()) ||
+        isAdmin()
+      );
+
+      // Platform does not support hard-deletes — only state transitions.
+      allow delete: if isAdmin();
+
+      // --- ACTIVITY SUBCOLLECTION ---
+      // Timeline comments and audit events are strictly participant-scoped.
+      // No open access — you must be a named participant to read/write the feed.
+      match /activity/{activityId} {
+        allow read, write: if isSignedIn() && (
+          get(/databases/$(database)/documents/assignments/$(assignmentId)).data.customerId    == request.auth.uid ||
+          get(/databases/$(database)/documents/assignments/$(assignmentId)).data.writerId      == request.auth.uid ||
+          get(/databases/$(database)/documents/assignments/$(assignmentId)).data.proofreaderId == request.auth.uid ||
+          isAdmin()
+        );
+      }
+    }
+    // -----------------------------------------------------------------------
+    // OCR JOBS COLLECTION
+    // -----------------------------------------------------------------------
+    match /ocrJobs/{jobId} {
+      allow create: if isSignedIn() && request.resource.data.customerId == request.auth.uid;
+      allow read: if isSignedIn() && (resource.data.customerId == request.auth.uid || isAdmin());
+      allow update: if isAdmin();
+      allow delete: if isSignedIn() && (resource.data.customerId == request.auth.uid || isAdmin());
+    }
+
+    // -----------------------------------------------------------------------
+    // RESEARCH REQUESTS COLLECTION
+    // -----------------------------------------------------------------------
+    match /researchRequests/{requestId} {
+      allow read: if isSignedIn() && (
+        resource.data.studentId == request.auth.uid ||
+        resource.data.assignedWriterId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isSignedIn() && (
+        hasRole('customer') || isAdmin()
+      ) && request.resource.data.studentId == request.auth.uid;
+      allow update: if isSignedIn() && (
+        resource.data.studentId == request.auth.uid ||
+        resource.data.assignedWriterId == request.auth.uid ||
+        isAdmin()
+      );
+      allow delete: if isAdmin();
+    }
+
+    // -----------------------------------------------------------------------
+    // DISPUTES COLLECTION
+    // -----------------------------------------------------------------------
+    match /disputes/{disputeId} {
+      allow read: if isSignedIn() && (
+        resource.data.studentId == request.auth.uid ||
+        resource.data.writerId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isSignedIn() && (
+        request.resource.data.studentId == request.auth.uid || isAdmin()
+      );
+      allow update: if isSignedIn() && (
+        resource.data.studentId == request.auth.uid ||
+        resource.data.writerId == request.auth.uid ||
+        isAdmin()
+      );
+      allow delete: if isAdmin();
+    }
+
+    // -----------------------------------------------------------------------
+    // AUDIT LOGS COLLECTION
+    // -----------------------------------------------------------------------
+    match /auditLogs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isSignedIn();
+      allow update, delete: if false;
+    }
+
+    // -----------------------------------------------------------------------
+    // NOTIFICATIONS COLLECTION
+    // -----------------------------------------------------------------------
+    match /notifications/{notificationId} {
+      // Users can read their own notifications; admins can read all
+      allow read: if isSignedIn() && (
+        resource.data.userId == request.auth.uid || isAdmin()
+      );
+      // Any signed-in user or system can create notifications
+      allow create: if isSignedIn();
+      // Only the recipient can mark read (update only); admin can update anything
+      allow update: if isSignedIn() && (
+        resource.data.userId == request.auth.uid || isAdmin()
+      );
+      // Deletion: recipient or admin
+      allow delete: if isSignedIn() && (
+        resource.data.userId == request.auth.uid || isAdmin()
+      );
+    }
+  }
+}

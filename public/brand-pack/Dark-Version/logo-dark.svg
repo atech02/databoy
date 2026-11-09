@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 650 120" width="100%" height="100%">
+  <defs>
+    <!-- Master Color Gradient -->
+    <linearGradient id="primGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366f1" />
+      <stop offset="50%" stop-color="#8b5cf6" />
+      <stop offset="100%" stop-color="#ec4899" />
+    </linearGradient>
+    
+    <!-- Circuit Line Gradient -->
+    <linearGradient id="cLineGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4f46e5" stop-opacity="0.8" />
+      <stop offset="100%" stop-color="#d946ef" stop-opacity="0.8" />
+    </linearGradient>
+  </defs>
+
+  <!-- Left: Stylized Scaled Head Icon -->
+  <g transform="translate(10, 10) scale(0.195)">
+    <!-- Smooth Head Silhouette -->
+    <path d="M190 380 C150 350, 130 270, 165 185 C190 120, 260 100, 320 145 C350 168, 365 200, 360 235 C358 248, 350 258, 345 270 C352 278, 354 288, 346 298 C338 308, 340 318, 328 328 C295 360, 245 385, 190 380 Z" 
+          fill="#0f172a" stroke="url(#primGrad)" stroke-width="6" stroke-linejoin="round" />
+
+    <!-- Circuit Lines & Nodes -->
+    <path d="M220 180 L270 210 L300 170" fill="none" stroke="url(#cLineGrad)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+    <path d="M270 210 L260 280 L200 310" fill="none" stroke="url(#cLineGrad)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+    <path d="M260 280 L310 285" fill="none" stroke="url(#cLineGrad)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+    <path d="M200 310 L180 250 L220 180" fill="none" stroke="url(#cLineGrad)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+
+    <circle cx="180" cy="250" r="11" fill="#ec4899" stroke="#ffffff" stroke-width="2.5" />
+    <circle cx="220" cy="180" r="11" fill="#6366f1" stroke="#ffffff" stroke-width="2.5" />
+    <circle cx="300" cy="170" r="11" fill="#8b5cf6" stroke="#ffffff" stroke-width="2.5" />
+    <circle cx="270" cy="210" r="11" fill="#6366f1" stroke="#ffffff" stroke-width="2.5" />
+    <circle cx="260" cy="280" r="11" fill="#8b5cf6" stroke="#ffffff" stroke-width="2.5" />
+    <circle cx="200" cy="310" r="11" fill="#ec4899" stroke="#ffffff" stroke-width="2.5" />
+    <circle cx="310" cy="285" r="11" fill="#10b981" stroke="#ffffff" stroke-width="2.5" />
+  </g>
+
+  <!-- Right: Typography Wordmark (Light Text for Dark backgrounds) -->
+  <text x="140" y="86" font-family="'Outfit', 'Inter', 'Segoe UI', sans-serif" font-size="76" font-weight="900" letter-spacing="-3px" fill="#ffffff">
+    Data<tspan fill="#8b5cf6">Boy</tspan>
+  </text>
+</svg>

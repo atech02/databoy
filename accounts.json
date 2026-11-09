@@ -1,0 +1,158 @@
+{"users": [
+{
+  "localId": "3qITUJBMvqbpkt1uPs77SRrClf42",
+  "email": "manyandophiri@gmail.com",
+  "emailVerified": false,
+  "passwordHash": "f+UW1XM1znzsBCXnWKb2VKtC3RabRKRyES2cAWOcIiI0iKTRsyIIycmAVLa+Jo37EmjX0WyMeGcLfaGkSFnhRQ==",
+  "salt": "MuzmPAmFaw3Z3g==",
+  "displayName": "Phiri Jones",
+  "lastSignedInAt": "1780224726942",
+  "createdAt": "1780217362018",
+  "providerUserInfo": []
+},
+{
+  "localId": "AUImI0g8M2cJ46UY8vQrvMkuab52",
+  "email": "manyandoingombe@gmail.com",
+  "emailVerified": false,
+  "passwordHash": "WLtu4yAzrv7c8jqRbVbrwG/2Uf8mDNZDN2u6mDug1Hgcc+XBWoz4QIflx0eSvNzyaEivDzFz0B3HKI4UIEYL/A==",
+  "salt": "RjRbxWHg3G5eHQ==",
+  "displayName": "Dodo",
+  "lastSignedInAt": "1780208419828",
+  "createdAt": "1780130946208",
+  "providerUserInfo": []
+},
+{
+  "localId": "Bps2TfZuLVXNQhW9aIQq3iZ8qTN2",
+  "email": "zenonmining@gmail.com",
+  "emailVerified": true,
+  "displayName": "Zenon Mining",
+  "photoUrl": "https://lh3.googleusercontent.com/a/ACg8ocI5sLwWV8h-GjzKbiFp8GZwBxAITcTZ5CCk2_XdLqcxwBYz0w=s96-c",
+  "lastSignedInAt": "1780251408015",
+  "createdAt": "1780251408014",
+  "providerUserInfo": [
+    {
+      "providerId": "google.com",
+      "rawId": "118229932285911434150",
+      "email": "zenonmining@gmail.com",
+      "displayName": "Zenon Mining",
+      "photoUrl": "https://lh3.googleusercontent.com/a/ACg8ocI5sLwWV8h-GjzKbiFp8GZwBxAITcTZ5CCk2_XdLqcxwBYz0w=s96-c"
+    }
+  ]
+},
+{
+  "localId": "EQtG8duaMZgKda41GG3rkMzKbQi2",
+  "email": "manyandoamon@gmail.com",
+  "emailVerified": false,
+  "passwordHash": "lP+Y1cwUjac2oLGZ2NYmO5fN3QWRBlbL4rIoaJt59nvi9qS2+rJeZnGGbsKm4YJXThTtmnKNEN7eNDQA1sP8Tg==",
+  "salt": "kZqXZbCzG+f/YA==",
+  "displayName": "john snow",
+  "lastSignedInAt": "1780208532899",
+  "createdAt": "1780208532899",
+  "providerUserInfo": []
+},
+{
+  "localId": "HFgz3oL1FERhPbLZlhv0uxnpbmP2",
+  "email": "zulujames@gmail.com",
+  "emailVerified": false,
+  "passwordHash": "CBe1hVTgfGNUSwH/dumge+ANpEr/qFSk5EK623NZYplFU39sA9OnMtkat0eJRDEHhl5fHjDfvw6uuYDrtz6t7Q==",
+  "salt": "Sv9IZrG5/dHZYg==",
+  "displayName": "James Zulu",
+  "lastSignedInAt": "1780516251764",
+  "createdAt": "1780224772731",
+  "providerUserInfo": []
+},
+{
+  "localId": "HQMtBabd9ZXXeJEC35e0oOYaxmq2",
+  "email": "mosesingombe@outlook.com",
+  "emailVerified": false,
+  "passwordHash": "/FhAFEzBMafswo9XJ7wQEPziRbBumDiWvdnGAL4A/az2/8CQImOaa1b5JMdbKYNHzcyg/E2iSbziEPVV3BHZIA==",
+  "salt": "dslGLFXCzKig8g==",
+  "displayName": "Kelvin ",
+  "lastSignedInAt": "1780156329067",
+  "createdAt": "1780156329067",
+  "providerUserInfo": []
+},
+{
+  "localId": "KMy8RErGiDbp0V4wQKwRnt7FXFE2",
+  "email": "manyandodo@gmail.com",
+  "emailVerified": false,
+  "passwordHash": "F5lA+uSCIHPw+laRgOBtDxSzUwgQ+TwSb6ZI37IqWLrnrSZcKwkI6hwTSU44SAP5FX7udTITHSKIRR69JIcRcw==",
+  "salt": "eiRkPn5+EktPqQ==",
+  "displayName": "Alese Phiri",
+  "lastSignedInAt": "1780217140015",
+  "createdAt": "1780217140015",
+  "providerUserInfo": []
+},
+{
+  "localId": "UYiN9NfsiWNLAQLYRmPt6y2v2bx1",
+  "email": "ingombe@gmail.com",
+  "emailVerified": false,
+  "passwordHash": "XepayLE/Ld9/i75c52fNHZpMbBD7IH7cDSws5GVzx3CeGl/R8T+rNqyrVbapmKVdevdCC+z6avwAkD/5qmQ4gg==",
+  "salt": "X06FlG78LxH5pA==",
+  "displayName": "Moses Writer",
+  "lastSignedInAt": "1780153041992",
+  "createdAt": "1780153041992",
+  "providerUserInfo": []
+},
+{
+  "localId": "Y5HyNP08PtPB5RpkRCb5I4z6xUs2",
+  "email": "peter@gmail.com",
+  "emailVerified": false,
+  "passwordHash": "20Hgn+iUALlPL2aLh+z5sao3NID3vhv+p9b4h6+BmkZKUdApIwW1CjnDIMqnNsFLfaD/1YSaHMJ5jEJLUrKLUA==",
+  "salt": "xUdwyPmWlZIdIg==",
+  "displayName": "Peter",
+  "lastSignedInAt": "1780210328518",
+  "createdAt": "1780210328518",
+  "providerUserInfo": []
+},
+{
+  "localId": "dJ1i9zFb7XhNU1SvmN0f6LYixVg1",
+  "email": "ingombemoses@gmail.com",
+  "emailVerified": true,
+  "displayName": "Moses Ingombe",
+  "photoUrl": "https://lh3.googleusercontent.com/a/ACg8ocLiM25GEte0UwLz500b7L1KcGrA-n5WmiBKG11BMsMyMyHRpA=s96-c",
+  "lastSignedInAt": "1780136761646",
+  "createdAt": "1780120115031",
+  "providerUserInfo": [
+    {
+      "providerId": "google.com",
+      "rawId": "104354236952867434251",
+      "email": "ingombemoses@gmail.com",
+      "displayName": "Moses Ingombe",
+      "photoUrl": "https://lh3.googleusercontent.com/a/ACg8ocLiM25GEte0UwLz500b7L1KcGrA-n5WmiBKG11BMsMyMyHRpA=s96-c"
+    }
+  ]
+},
+{
+  "localId": "esygVdPdMsboMGMiJQu66n57xU82",
+  "email": "manyando@gmail.com",
+  "emailVerified": false,
+  "passwordHash": "q9bvPQX/BzzN5slvtuekv0GUhRb+iDsk8HnoW9XONLEgtrd4wRf5SDLipewrbgeDQLihiJcya5ogidaKOrUUcA==",
+  "salt": "l8l4nl1eeCIt+g==",
+  "displayName": "john snow",
+  "lastSignedInAt": "1780208504544",
+  "createdAt": "1780208504544",
+  "providerUserInfo": []
+},
+{
+  "localId": "hMDyFnzswiSGwi4sv1vjD86DeD53",
+  "email": "anninachilombe@gmail.com",
+  "emailVerified": false,
+  "passwordHash": "oZ3AzZe+WwbLW1FMIuHoo/AnM8Kz+WE4p8sCcuIo9nOEjH+NtX9U+e1TDH05PSVDUXTOxc4XK1K5l97OykDtiw==",
+  "salt": "owZQu0HNnN1iCA==",
+  "displayName": "Alright no ",
+  "lastSignedInAt": "1780250407679",
+  "createdAt": "1780250407679",
+  "providerUserInfo": []
+},
+{
+  "localId": "il9pNI65a0PLpHJrDsiGqPLFxvm2",
+  "email": "testuser@gmail.com",
+  "emailVerified": false,
+  "passwordHash": "1fq3cS+vN8rUGYpotO25/BBKhtEzyJhXS+b2sGPEdxQD/Zmzwh02YYF3OX/HfdT3uIpAFG/7y+IO6sj1EQoQQA==",
+  "salt": "LCBGGDdVUhsRiQ==",
+  "displayName": "Test user",
+  "lastSignedInAt": "1780217918528",
+  "createdAt": "1780217918528",
+  "providerUserInfo": []
+}]}

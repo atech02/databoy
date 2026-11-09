@@ -1,0 +1,82 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // -----------------------------------------------------------------------
+    // AUTH HELPER
+    // -----------------------------------------------------------------------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // -----------------------------------------------------------------------
+    // ASSIGNMENT BRIEFS
+    // Path: assignments/{projectId}/{filename}
+    // Authenticated users (customers) can upload their own assignment briefs.
+    // The Cloud Function service account reads these server-side (bypasses rules).
+    // Admins can read all assignment files.
+    // -----------------------------------------------------------------------
+    match /assignments/{projectId}/{filename} {
+      // Any authenticated user can upload files into any project folder.
+      // Project-level ownership is enforced at the Firestore layer.
+      allow write: if isSignedIn()
+                   && request.resource.size < 20 * 1024 * 1024  // 20 MB max
+                   && (
+                     request.resource.contentType.matches('image/.*') ||
+                     request.resource.contentType == 'application/pdf' ||
+                     request.resource.contentType == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+                     request.resource.contentType == 'application/msword'
+                   );
+
+      // Authenticated users can read files (for download URLs in the UI).
+      allow read: if isSignedIn();
+    }
+
+    // -----------------------------------------------------------------------
+    // RESEARCH DOCUMENTS
+    // Path: research/{projectId}/{filename}
+    // Same rules as assignments.
+    // -----------------------------------------------------------------------
+    match /research/{projectId}/{filename} {
+      allow write: if isSignedIn()
+                   && request.resource.size < 20 * 1024 * 1024  // 20 MB max
+                   && (
+                     request.resource.contentType.matches('image/.*') ||
+                     request.resource.contentType == 'application/pdf' ||
+                     request.resource.contentType == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+                     request.resource.contentType == 'application/msword'
+                   );
+
+      allow read: if isSignedIn();
+    }
+
+    // -----------------------------------------------------------------------
+    // SPECIALIST VERIFICATION DOCUMENTS
+    // Path: verifications/{uid}/{filename}
+    // Only the owning user can upload their own verification docs.
+    // Admins can read all verification documents.
+    // -----------------------------------------------------------------------
+    match /verifications/{uid}/{filename} {
+      allow write: if isSignedIn()
+                   && request.auth.uid == uid
+                   && request.resource.size < 10 * 1024 * 1024  // 10 MB max
+                   && (
+                     request.resource.contentType.matches('image/.*') ||
+                     request.resource.contentType == 'application/pdf'
+                   );
+
+      // Owner can read their own docs, admins can read all for audits
+      allow read: if isSignedIn() && (
+        request.auth.uid == uid || 
+        firestore.get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+      );
+    }
+
+    // -----------------------------------------------------------------------
+    // DENY ALL OTHER PATHS
+    // -----------------------------------------------------------------------
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

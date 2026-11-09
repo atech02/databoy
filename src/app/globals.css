@@ -1,0 +1,132 @@
+@import "tailwindcss";
+
+@theme {
+  --color-white: hsl(0 0% 99%);
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+}
+
+:root {
+  --background: 210 40% 98%;          /* #F8FAFC (Slate 50) */
+  --foreground: 220 39% 11%;          /* #111827 (Slate 900) */
+  
+  --card: 0 0% 99%;                   /* #FCFCFC (99% Off-white, no 100% white) */
+  --card-foreground: 220 39% 11%;     /* #111827 (Slate 900) */
+  
+  --popover: 0 0% 99%;                /* #FCFCFC */
+  --popover-foreground: 220 39% 11%;
+  
+  --primary: 262.1 83.3% 57.8%;
+  --primary-foreground: 210 20% 98%;
+  
+  --secondary: 210 40% 96.1%;
+  --secondary-foreground: 222.2 47.4% 11.2%;
+  
+  --muted: 210 40% 96.1%;
+  --muted-foreground: 215 16% 47%;    /* #6B7280 (Slate 500) */
+  
+  --accent: 210 40% 96.1%;
+  --accent-foreground: 222.2 47.4% 11.2%;
+  
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 210 20% 98%;
+  
+  --border: 220 13% 91%;              /* #E5E7EB (Gray 200) */
+  --input: 220 13% 91%;               /* #E5E7EB (Gray 200) */
+  --ring: 262.1 83.3% 57.8%;
+  
+  --radius: 0.6rem;
+}
+
+.dark {
+  --background: 224 71% 4.5%;
+  --foreground: 213 31% 91%;
+  
+  --card: 224 35% 8.5%;
+  --card-foreground: 213 31% 91%;
+  
+  --popover: 224 35% 8.5%;
+  --popover-foreground: 213 31% 91%;
+  
+  --primary: 262 80% 55%;
+  --primary-foreground: 210 20% 98%;
+  
+  --secondary: 215 27.9% 16.9%;
+  --secondary-foreground: 210 20% 98%;
+  
+  --muted: 215 27.9% 16.9%;
+  --muted-foreground: 215.4 16.3% 56.9%;
+  
+  --accent: 215 27.9% 16.9%;
+  --accent-foreground: 210 20% 98%;
+  
+  --destructive: 0 62.8% 30.6%;
+  --destructive-foreground: 210 20% 98%;
+  
+  --border: 217 28% 15%;
+  --input: 217 28% 13%;
+  --ring: 262 80% 55%;
+}
+
+* {
+  border-color: hsl(var(--border));
+}
+
+body {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Hide mobile bottom action bar instantly when drawer menu is active */
+body.mobile-menu-open .mobile-bottom-action-bar {
+  display: none !important;
+}
+
+/* Hide scrollbars for chrome/safari/opera and MS/Firefox browsers */
+.scrollbar-none::-webkit-scrollbar {
+  display: none !important;
+}
+.scrollbar-none {
+  -ms-overflow-style: none !important;  /* IE and Edge */
+  scrollbar-width: none !important;  /* Firefox */
+}
+
+/* Prevent general body horizontal overflow */
+html, body {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+

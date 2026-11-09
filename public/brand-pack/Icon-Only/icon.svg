@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <!-- Background Radial Glow -->
+    <radialGradient id="bgGlow" cx="50%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#1e1b4b" />
+      <stop offset="100%" stop-color="#0a0518" />
+    </radialGradient>
+    
+    <!-- Primary Connected Intelligence Gradient -->
+    <linearGradient id="primaryGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366f1" />
+      <stop offset="50%" stop-color="#8b5cf6" />
+      <stop offset="100%" stop-color="#ec4899" />
+    </linearGradient>
+
+    <!-- Subdued Line Gradient -->
+    <linearGradient id="lineGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4f46e5" stop-opacity="0.8" />
+      <stop offset="100%" stop-color="#d946ef" stop-opacity="0.8" />
+    </linearGradient>
+  </defs>
+
+  <!-- Outer circular boundary with deep tech theme -->
+  <circle cx="256" cy="256" r="240" fill="url(#bgGlow)" stroke="#312e81" stroke-width="6" />
+
+  <!-- Smooth Gender-Neutral Head Silhouette -->
+  <path d="M190 380 C150 350, 130 270, 165 185 C190 120, 260 100, 320 145 C350 168, 365 200, 360 235 C358 248, 350 258, 345 270 C352 278, 354 288, 346 298 C338 308, 340 318, 328 328 C295 360, 245 385, 190 380 Z" 
+        fill="#0f172a" stroke="url(#primaryGrad)" stroke-width="5" stroke-linejoin="round" />
+
+  <!-- Flowing Network Circuit Lines (Connected Intelligence) -->
+  <!-- Synaptic Paths -->
+  <path d="M220 180 L270 210 L300 170" fill="none" stroke="url(#lineGrad)" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M270 210 L260 280 L200 310" fill="none" stroke="url(#lineGrad)" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M260 280 L310 285" fill="none" stroke="url(#lineGrad)" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M200 310 L180 250 L220 180" fill="none" stroke="url(#lineGrad)" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" />
+
+  <!-- Connected Synaptic Nodes (Intelligence Points) -->
+  <!-- 1. Occipital Lobe Node (Vision/Analysis) -->
+  <circle cx="180" cy="250" r="10" fill="#ec4899" stroke="#ffffff" stroke-width="2.5" />
+  
+  <!-- 2. Parietal Lobe Node (Processing) -->
+  <circle cx="220" cy="180" r="10" fill="#6366f1" stroke="#ffffff" stroke-width="2.5" />
+
+  <!-- 3. Frontal Lobe Node (Logic/Decisions) -->
+  <circle cx="300" cy="170" r="10" fill="#8b5cf6" stroke="#ffffff" stroke-width="2.5" />
+
+  <!-- 4. Temporal Lobe Node (Memory/Learning) -->
+  <circle cx="270" cy="210" r="10" fill="#6366f1" stroke="#ffffff" stroke-width="2.5" />
+
+  <!-- 5. Cerebellum Node (Support/Security) -->
+  <circle cx="260" cy="280" r="10" fill="#8b5cf6" stroke="#ffffff" stroke-width="2.5" />
+
+  <!-- 6. Brain Stem/Escrow Node (Stabilization) -->
+  <circle cx="200" cy="310" r="10" fill="#ec4899" stroke="#ffffff" stroke-width="2.5" />
+  
+  <!-- 7. Output Guidance Node (Delivery) -->
+  <circle cx="310" cy="285" r="10" fill="#10b981" stroke="#ffffff" stroke-width="2.5" />
+</svg>

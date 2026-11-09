@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="100%" height="100%">
+  <defs>
+    <!-- Primary connected gradient -->
+    <linearGradient id="favGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366f1" />
+      <stop offset="100%" stop-color="#ec4899" />
+    </linearGradient>
+  </defs>
+
+  <!-- Simplified Head Profile Silhouette (Extra thick strokes for 16px tab visibility) -->
+  <path d="M47 95 C37 87, 32 67, 41 46 C47 30, 65 25, 80 36 C87 42, 91 50, 90 59 C89 62, 87 65, 86 68 C88 70, 88 72, 86 75 C84 77, 85 80, 81 82 C73 87, 61 95, 47 95 Z" 
+        fill="#0f172a" stroke="url(#favGrad)" stroke-width="6.5" stroke-linejoin="round" />
+
+  <!-- Core Connected Nodes (Enlarged for legibility) -->
+  <circle cx="55" cy="45" r="4.5" fill="#6366f1" stroke="#ffffff" stroke-width="1.5" />
+  <circle cx="75" cy="42" r="4.5" fill="#8b5cf6" stroke="#ffffff" stroke-width="1.5" />
+  <circle cx="68" cy="52" r="4.5" fill="#6366f1" stroke="#ffffff" stroke-width="1.5" />
+  <circle cx="65" cy="70" r="4.5" fill="#8b5cf6" stroke="#ffffff" stroke-width="1.5" />
+  <circle cx="78" cy="71" r="4.5" fill="#10b981" stroke="#ffffff" stroke-width="1.5" />
+</svg>

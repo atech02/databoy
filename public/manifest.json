@@ -1,0 +1,31 @@
+{
+  "name": "DataBoy Platform",
+  "short_name": "DataBoy",
+  "description": "DataBoy assignments platform - Customer, Writer, Proofreader, and Admin portal",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#6d28d9",
+  "orientation": "portrait-primary",
+  "scope": "/",
+  "icons": [
+    {
+      "src": "/brand-pack/App-Icons/app-icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/brand-pack/App-Icons/app-icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/brand-pack/App-Icons/icon-adaptive.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}
