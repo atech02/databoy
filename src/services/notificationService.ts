@@ -24,71 +24,31 @@ const COLLECTION = "notifications";
 
 export const notificationService = {
   /**
-   * Creates a notification for a single user.
+   * Notifications are issued authoritatively by backend services.
+   * Client code no longer writes directly to `notifications`.
    */
   async createNotification(
-    userId: string,
-    type: NotificationType,
-    title: string,
-    message: string,
-    relatedId?: string,
-    relatedType?: Notification["relatedType"],
-    relatedUrl?: string
+    _userId: string,
+    _type: NotificationType,
+    _title: string,
+    _message: string,
+    _relatedId?: string,
+    _relatedType?: Notification["relatedType"],
+    _relatedUrl?: string
   ): Promise<void> {
-    try {
-      const colRef = collection(db, COLLECTION);
-      await addDoc(colRef, {
-        userId,
-        type,
-        title,
-        message,
-        relatedId: relatedId ?? null,
-        relatedType: relatedType ?? null,
-        relatedUrl: relatedUrl ?? null,
-        read: false,
-        createdAt: new Date().toISOString(),
-      });
-    } catch (e) {
-      // Notification failures should not crash the caller
-      console.error("[notificationService] Failed to create notification:", e);
-    }
+    return;
   },
 
-  /**
-   * Creates the same notification for multiple users at once (batch).
-   */
   async createBulkNotifications(
-    userIds: string[],
-    type: NotificationType,
-    title: string,
-    message: string,
-    relatedId?: string,
-    relatedType?: Notification["relatedType"],
-    relatedUrl?: string
+    _userIds: string[],
+    _type: NotificationType,
+    _title: string,
+    _message: string,
+    _relatedId?: string,
+    _relatedType?: Notification["relatedType"],
+    _relatedUrl?: string
   ): Promise<void> {
-    if (!userIds.length) return;
-    try {
-      const batch = writeBatch(db);
-      const colRef = collection(db, COLLECTION);
-      const timestamp = new Date().toISOString();
-      for (const userId of userIds) {
-        const newRef = doc(colRef);
-        batch.set(newRef, {
-          userId,
-          type,
-          title,
-          message,
-          relatedId: relatedId ?? null,
-          relatedType: relatedType ?? null,
-          relatedUrl: relatedUrl ?? null,
-          read: false,
-          createdAt: timestamp,
-        });
-      }
-      await batch.commit();
-    } catch (e) {
-      console.error("[notificationService] Failed to create bulk notifications:", e);
-    }
+    return;
   },
 
   /**

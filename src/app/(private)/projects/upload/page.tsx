@@ -4,9 +4,10 @@ import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
 import { projectService } from "@/services/projectService";
+import { apiClient } from "@/services/apiClient";
 import { ocrService } from "@/services/ocrService";
 import { storageService } from "@/services/storageService";
-import { notificationService } from "@/services/notificationService";
+import MobileMoneyCheckoutModal from "@/components/payment/MobileMoneyCheckoutModal";
 import {
   calculateAssignmentPricing,
   calculateCommissionBreakdown,
@@ -70,8 +71,8 @@ export default function UploadProject() {
 
   // Payment Checkout Modal States
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
-  const [isProcessingPayment, setIsProcessingPayment] = useState(false);
-  const [paymentError, setPaymentError] = useState<string | null>(null);
+  const [pendingAssignmentId, setPendingAssignmentId] = useState<string>("");
+  const [pendingBudget, setPendingBudget] = useState<number>(0);
 
   // Academic level + subject
   const [academicLevel, setAcademicLevel] = useState("degree");
@@ -178,14 +179,22 @@ export default function UploadProject() {
     let downloadedUrl = "";
     let filePath = "";
     try {
-      const uploadRes = await storageService.uploadFile("assignments", projectId, file, (progress) => {
-        // Optionally map upload progress
+      if (!profile?.uid) {
+        throw new Error("You must be signed in to upload assignment files.");
+      }
+      const uploadRes = await storageService.uploadFile("pending", profile.uid, file, (progress) => {
+        setOcrLog(`Uploading brief document to private R2 storage (${progress}%)...`);
       });
       downloadedUrl = uploadRes.url;
-      filePath = uploadRes.path;
-      
+      filePath = uploadRes.storageKey;
+
       const briefProjectFile: ProjectFile = {
         uid: "file-brief-" + Math.floor(1000 + Math.random() * 9000),
+        fileId: uploadRes.fileId,
+        storageKey: uploadRes.storageKey,
+        storagePath: uploadRes.path,
+        storageProvider: "r2",
+        contentType: uploadRes.contentType,
         name: file.name,
         url: downloadedUrl,
         uploadedBy: profile?.uid || "customer",
@@ -310,6 +319,10 @@ export default function UploadProject() {
   };
 
   const removeFile = (uid: string) => {
+    const target = filesList.find(f => f.uid === uid);
+    if (target?.fileId) {
+      storageService.deleteFile(target.fileId).catch(() => {});
+    }
     setFilesList(prev => prev.filter(f => f.uid !== uid));
     if (uid.startsWith("file-brief-")) {
       setBriefFile(null);
@@ -365,7 +378,7 @@ export default function UploadProject() {
     setShowReviewBanner(false);
   };
 
-  const handleSubmitAcademic = (e: React.FormEvent) => {
+  const handleSubmitAcademic = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!profile) return;
     setError(null);
@@ -375,86 +388,26 @@ export default function UploadProject() {
       return;
     }
 
-    setShowCheckoutModal(true);
-  };
-
-  const handleExecutePaymentAndDeploy = async () => {
-    if (!profile) return;
-    setIsProcessingPayment(true);
-    setPaymentError(null);
-
     try {
-      // Simulate brief processing delay (realistic UX feel)
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-
-      const newProj = await projectService.createProject({
-        id: projectId,
-        title,
-        projectType: "academic_assignment",
-        deadline,
-        budget: academicPriceZMW,
-        guidelines,
-        customerId: profile.uid,
-        pageCount,
-        wordCount: guidelines.trim().split(/\s+/).filter(Boolean).length,
-        referencingStyle,
-        ocrText: extractedOcrText || guidelines.slice(0, 300),
-        ocrParsedFields: ocrSuggestion || null,
-        ocrMetrics: ocrMetrics || null,
-        extractionMethod: ocrMetrics?.extractionMethod || (briefFile ? "pdf_direct" : "docx_direct"),
-        confidenceLevel: ocrConfidence || "high",
-        currency: "ZMW",
-        writerCommission: breakdown.writer,
-        proofreaderCommission: breakdown.proofreader,
-        databoyCommission: breakdown.databoy,
-        academicLevel,
-        subject,
-        status: "awaiting_payment",
-        paymentMode: "test",
-        escrowMode: "simulated",
-        escrowStatus: "pending_funding",
-        paymentStatus: "awaiting_payment",
-        allocationStatus: "pending",
-        pricingBreakdown: pricingResult,
-      });
-
-      // Transition awaiting_payment -> funded
-      await projectService.transitionProjectStatus(newProj.id, "funded", profile, {
-        paymentStatus: "funded",
-        escrowStatus: "held",
-        payoutStatus: "escrowed",
-        fundedAt: new Date().toISOString(),
-        files: filesList,
-      });
-
-      // Transition funded -> awaiting_assignment
-      await projectService.transitionProjectStatus(newProj.id, "awaiting_assignment", profile, {
-        allocationStatus: "pending",
-      });
-
-      // Fire in-app notifications
-      try {
-        // Get admin IDs for notification
-        const { allocationService } = await import("@/services/allocationService");
-        const adminIds = await allocationService.getAdminIds();
-        await notificationService.notifyEscrowFunded(
-          profile.uid,
-          adminIds,
-          newProj.id,
-          title,
-          academicPriceZMW
-        );
-      } catch (notifErr) {
-        console.warn("Notification dispatch failed (non-critical):", notifErr);
+      if (!pendingAssignmentId) {
+        const res: any = await apiClient.post("/api/assignments", {
+          title: title.trim(),
+          description: guidelines.trim(),
+          academicLevel,
+          subject: subject || "general",
+          deadline,
+          wordCount: guidelines.trim().split(/\s+/).filter(Boolean).length || pageCount * 250,
+          pageCount,
+          serviceType: "assignment",
+          referencingStyle,
+          files: filesList,
+        });
+        setPendingAssignmentId(res.assignmentId);
+        setPendingBudget(Number(res.budget || academicPriceZMW));
       }
-
-      setCreatedId(newProj.id);
-      setShowCheckoutModal(false);
-      setShowSuccessModal(true);
+      setShowCheckoutModal(true);
     } catch (err: any) {
-      setPaymentError(err?.message || "Simulated payment failed.");
-    } finally {
-      setIsProcessingPayment(false);
+      setError(err?.message || "Failed to create assignment for checkout.");
     }
   };
 
@@ -895,71 +848,21 @@ export default function UploadProject() {
         </Card>
 
       {/* ======================================================================
-          SIMULATED ESCROW CHECKOUT MODAL
+          LIPILA MOBILE MONEY CHECKOUT MODAL
           ====================================================================== */}
-      <Modal
-        isOpen={showCheckoutModal}
+      <MobileMoneyCheckoutModal
+        isOpen={showCheckoutModal && Boolean(pendingAssignmentId)}
         onClose={() => setShowCheckoutModal(false)}
-        title="Fund Escrow — Test Mode"
-      >
-        <div className="flex flex-col gap-5 text-sm">
-          {/* TEST MODE banner */}
-          <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3 flex items-center gap-3">
-            <span className="text-amber-500 text-lg">🧪</span>
-            <div>
-              <span className="text-[11px] font-black uppercase tracking-widest text-amber-600 block">Simulated Escrow — Test Mode</span>
-              <span className="text-[10px] text-amber-600/80 font-medium">No real money moves. This simulates the full payment lifecycle for workflow testing.</span>
-            </div>
-          </div>
-
-          {paymentError && <Alert variant="error" title="Transaction Failed">{paymentError}</Alert>}
-
-          {/* Assignment summary */}
-          <div className="bg-secondary/45 p-4 rounded-xl border border-border/30 flex flex-col gap-3">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Funding escrow for:</span>
-            <h4 className="text-sm font-bold text-foreground truncate">{title || "Academic Assignment"}</h4>
-            <div className="grid grid-cols-2 gap-3 text-xs">
-              <div>
-                <span className="text-[9px] text-muted-foreground font-bold uppercase block">Pages</span>
-                <span className="font-bold text-foreground">{pageCount}</span>
-              </div>
-              <div>
-                <span className="text-[9px] text-muted-foreground font-bold uppercase block">Level</span>
-                <span className="font-bold text-foreground">{ACADEMIC_LEVELS.find(l => l.value === academicLevel)?.label || academicLevel}</span>
-              </div>
-              <div>
-                <span className="text-[9px] text-muted-foreground font-bold uppercase block">Urgency</span>
-                <span className={`font-bold ${daysLeft <= 1 ? 'text-danger' : daysLeft <= 3 ? 'text-amber-500' : 'text-foreground'}`}>
-                  {pricingResult.urgencyBand}
-                </span>
-              </div>
-              <div>
-                <span className="text-[9px] text-muted-foreground font-bold uppercase block">Deadline</span>
-                <span className="font-bold text-foreground">{deadline || '—'}</span>
-              </div>
-            </div>
-            <div className="flex justify-between items-center pt-3 border-t border-border/20 text-foreground font-extrabold text-base">
-              <span>Test Escrow Amount</span>
-              <span className="text-success">K{academicPriceZMW.toFixed(2)}</span>
-            </div>
-          </div>
-
-          <div className="flex justify-end gap-3 pt-2 border-t border-border/20">
-            <Button variant="outline" size="sm" onClick={() => setShowCheckoutModal(false)} disabled={isProcessingPayment}>
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={handleExecutePaymentAndDeploy}
-              isLoading={isProcessingPayment}
-              className="bg-success border-success text-white hover:bg-success/90 hover:border-success/90"
-            >
-              Confirm Test Escrow Funding
-            </Button>
-          </div>
-        </div>
-      </Modal>
+        assignmentId={pendingAssignmentId}
+        targetType="assignment"
+        assignmentTitle={title || "Academic Assignment"}
+        amount={pendingBudget || academicPriceZMW}
+        onSuccess={() => {
+          setCreatedId(pendingAssignmentId);
+          setShowCheckoutModal(false);
+          setShowSuccessModal(true);
+        }}
+      />
 
       {/* ======================================================================
           SUCCESS CONFIRMATION MODAL

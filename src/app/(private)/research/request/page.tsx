@@ -444,14 +444,18 @@ ${supervisorComments ? `\nSupervisor Feedback Comments:\n${supervisorComments}` 
 
     setLoading(true);
     try {
-      // Direct upload to Firebase Storage exactly as submitted (bypass OCR)
+      // Direct upload to private pending Storage path (validated by backend upload gate)
       const filesMetadata = await Promise.all(
         attachedFiles.map(async (file) => {
-          const tempReqId = "draft-" + Math.floor(1000 + Math.random() * 9000);
-          const uploadResult = await storageService.uploadFile("research", tempReqId, file);
+          const uploadResult = await storageService.uploadFile("pending", profile.uid, file);
           const downloadUrl = uploadResult.url;
           return {
             uid: `file-${Math.floor(1000 + Math.random() * 9000)}`,
+            fileId: uploadResult.fileId,
+            storageKey: uploadResult.storageKey,
+            storagePath: uploadResult.path,
+            storageProvider: "r2" as const,
+            contentType: uploadResult.contentType,
             name: file.name,
             url: downloadUrl,
             uploadedBy: profile.uid,

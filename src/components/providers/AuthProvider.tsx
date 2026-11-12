@@ -9,11 +9,13 @@ import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
   updateProfile
 } from "firebase/auth";
 import { auth } from "@/config/firebase";
 import { UserProfile } from "@/types/domain";
 import { userService } from "@/services/userService";
+import { apiClient } from "@/services/apiClient";
 
 interface AuthContextType {
   user: User | null;
@@ -22,6 +24,7 @@ interface AuthContextType {
   error: string | null;
   loginWithGoogle: () => Promise<void>;
   loginWithEmail: (email: string, password: string) => Promise<void>;
+  sendPasswordReset: (email: string) => Promise<void>;
   registerWithEmail: (email: string, password: string, name: string, role: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshProfile: () => Promise<void>;
@@ -129,12 +132,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const loginWithEmail = async (email: string, password: string) => {
     setLoading(true);
     try {
+      await apiClient.post("/api/auth/login-guard", { email }, { requiresAuth: false });
       await signInWithEmailAndPassword(auth, email, password);
     } catch (error) {
       console.error("Error signing in with email:", error);
       setLoading(false);
       throw error;
     }
+  };
+
+  const sendPasswordReset = async (email: string) => {
+    await apiClient.post("/api/auth/password-recovery-guard", { email }, { requiresAuth: false });
+    await sendPasswordResetEmail(auth, email);
   };
 
   const registerWithEmail = async (email: string, password: string, name: string, role: string) => {
@@ -269,6 +278,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       error, 
       loginWithGoogle, 
       loginWithEmail, 
+      sendPasswordReset,
       registerWithEmail, 
       logout, 
       refreshProfile,

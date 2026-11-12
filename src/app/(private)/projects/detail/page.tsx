@@ -8,6 +8,8 @@ import { auditService } from "@/services/auditService";
 import { adminService } from "@/services/adminService";
 import { allocationService } from "@/services/allocationService";
 import { notificationService } from "@/services/notificationService";
+import { storageService } from "@/services/storageService";
+import { AuthorizedFileLink } from "@/components/ui/AuthorizedFileLink";
 import { Button } from "@/components/ui/Button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -16,6 +18,7 @@ import { Textarea } from "@/components/ui/Input";
 import { Loader } from "@/components/ui/Loader";
 import { BackButton } from "@/components/ui/BackButton";
 import { Modal } from "@/components/ui/Modal";
+import MobileMoneyCheckoutModal from "@/components/payment/MobileMoneyCheckoutModal";
 import { Project, ProjectStatus, ProjectActivity, PayoutStatus, UserProfile } from "@/types/domain";
 import { PROJECT_TYPES, ACADEMIC_LEVELS } from "@/utils/lookups";
 
@@ -64,6 +67,18 @@ function ProjectDetailsContent() {
   const [error, setError] = useState<string | null>(null);
   const [showOcrAudit, setShowOcrAudit] = useState(false);
   const [showEscrowModal, setShowEscrowModal] = useState(false);
+
+  // Revision & Dispute Modal states (Phase 4)
+  const [showRevisionModal, setShowRevisionModal] = useState(false);
+  const [revisionExplanation, setRevisionExplanation] = useState("");
+  const [isSubmittingRevision, setIsSubmittingRevision] = useState(false);
+
+  const [showCustomerDisputeModal, setShowCustomerDisputeModal] = useState(false);
+  const [customerDisputeReason, setCustomerDisputeReason] = useState("");
+  const [customerDisputeDetails, setCustomerDisputeDetails] = useState("");
+  const [customerDisputeEvidence, setCustomerDisputeEvidence] = useState<any[]>([]);
+  const [isUploadingDisputeFile, setIsUploadingDisputeFile] = useState(false);
+  const [isSubmittingCustomerDispute, setIsSubmittingCustomerDispute] = useState(false);
 
   // Admin governance state
   const [availableWriters, setAvailableWriters] = useState<UserProfile[]>([]);
@@ -227,185 +242,97 @@ function ProjectDetailsContent() {
     }
   };
 
-  // Student simulated escrow payment
-  const handleStudentFundEscrow = async () => {
-    if (!project || !profile) return;
-    setIsTransitioning(true);
+  // Customer revision request
+  const handleCustomerRequestRevision = async () => {
+    if (!project || !revisionExplanation.trim()) return;
+    setIsSubmittingRevision(true);
     try {
-      const timestamp = new Date().toISOString();
-      
-      // If status is draft or priced, first transition to awaiting_payment
-      if (project.status === "draft" || project.status === "priced") {
-        await projectService.transitionProjectStatus(project.id, "awaiting_payment", profile);
-      }
-
-      // Then transition awaiting_payment -> funded
-      await projectService.transitionProjectStatus(project.id, "funded", profile, {
-        paymentStatus: "funded",
-        escrowStatus: "held",
-        payoutStatus: "escrowed",
-        fundedAt: timestamp,
-      });
-
-      // Then transition funded -> awaiting_assignment
-      await projectService.transitionProjectStatus(project.id, "awaiting_assignment", profile, {
-        allocationStatus: "pending",
-      });
-
-      // Fire notifications
-      const adminIds = await allocationService.getAdminIds();
-      await notificationService.notifyEscrowFunded(
-        project.customerId,
-        adminIds,
-        project.id,
-        project.title,
-        project.budget
-      );
-
-      setShowEscrowModal(false);
-      setAdminSuccess("Simulated payment succeeded! Test escrow funds are secured.");
-      
-      // Reload project details
+      await projectService.requestRevision(project.id, revisionExplanation.trim());
+      setShowRevisionModal(false);
+      setRevisionExplanation("");
+      setAdminSuccess("Revision request submitted successfully to the writer.");
       const updated = await projectService.getProject(project.id);
       if (updated) setProject(updated);
-    } catch (err: any) {
-      alert(err?.message || "Failed to fund escrow.");
+    } catch (e: any) {
+      alert("Failed to submit revision: " + (e?.message || e));
     } finally {
-      setIsTransitioning(false);
+      setIsSubmittingRevision(false);
     }
   };
 
-  // Admin escrow actions (simulated)
-  const handleAdminEscrowAction = async (action: "fund" | "release" | "refund" | "reset") => {
-    if (!project || !profile) return;
-    const labels = {
-      fund: "Fund Test Escrow",
-      release: "Release Escrow to Writer",
-      refund: "Refund Escrow to Student",
-      reset: "Reset Assignment and Test Escrow"
-    };
-    if (!confirm(`Confirm: ${labels[action]}? This is a simulated action.`)) return;
-    setIsTransitioning(true);
+  // Customer dispute evidence upload to R2
+  const handleUploadDisputeEvidence = async (file: File) => {
+    if (!project) return;
+    setIsUploadingDisputeFile(true);
     try {
-      const { doc, updateDoc } = await import("firebase/firestore");
-      const { db } = await import("@/config/firebase");
-      const timestamp = new Date().toISOString();
+      const uploaded = await storageService.uploadFile("dispute", project.id, file);
+      setCustomerDisputeEvidence((prev) => [
+        ...prev,
+        {
+          fileId: uploaded.fileId,
+          storageKey: uploaded.storageKey,
+          name: uploaded.fileName,
+          url: uploaded.url,
+          contentType: uploaded.contentType,
+          sizeBytes: uploaded.sizeBytes,
+        },
+      ]);
+    } catch (e: any) {
+      alert("Failed to upload dispute evidence: " + (e?.message || e));
+    } finally {
+      setIsUploadingDisputeFile(false);
+    }
+  };
 
-      if (action === "fund") {
-        // Transition awaiting_payment -> funded -> awaiting_assignment
-        await projectService.transitionProjectStatus(project.id, "funded", profile, {
-          paymentStatus: "funded",
-          escrowStatus: "held",
-          payoutStatus: "escrowed",
-          fundedAt: timestamp,
-        });
-        await projectService.transitionProjectStatus(project.id, "awaiting_assignment", profile, {
-          allocationStatus: "pending",
-        });
-
-        // Fire notifications
-        const adminIds = await allocationService.getAdminIds();
-        await notificationService.notifyEscrowFunded(
-          project.customerId,
-          adminIds,
-          project.id,
-          project.title,
-          project.budget
-        );
-
-        setAdminSuccess("Test escrow funded successfully. Assignment is now awaiting allocation.");
-      } else if (action === "release") {
-        // Force state to completed, and set escrow to released
-        await projectService.transitionProjectStatus(project.id, "completed", profile, {
-          escrowStatus: "released",
-          payoutStatus: "released",
-          paymentStatus: "funded",
-          releasedAt: timestamp,
-        });
-
-        if (project.writerId) {
-          await notificationService.notifyCompleted(project.customerId, project.writerId, project.id, project.title);
-        }
-
-        setAdminSuccess("Escrow released to writer. Project set to Completed.");
-      } else if (action === "refund") {
-        // Force state to cancelled, and set escrow to refunded
-        await projectService.transitionProjectStatus(project.id, "cancelled", profile, {
-          escrowStatus: "refunded",
-          payoutStatus: "refunded",
-          paymentStatus: "refunded",
-          refundedAt: timestamp,
-        });
-
-        // Notify customer
-        await notificationService.createNotification(
-          project.customerId,
-          "system",
-          "Escrow Refunded",
-          `The test escrow for "${project.title}" has been refunded to your student account.`,
-          project.id,
-          "assignment",
-          `/projects/detail?id=${project.id}`
-        );
-
-        setAdminSuccess("Escrow refunded to student. Project cancelled.");
-      } else if (action === "reset") {
-        // Reset everything back to awaiting_payment
-        const projRef = doc(db, "assignments", project.id);
-        
-        const resetHistoryEntry = {
-          status: "awaiting_payment" as const,
-          actorId: profile.uid,
-          actorName: profile.displayName,
-          actorRole: profile.role,
-          timestamp,
-          note: "Admin reset assignment and test escrow status."
-        };
-        const currentHistory = project.statusHistory || [];
-
-        await updateDoc(projRef, {
-          status: "awaiting_payment",
-          payoutStatus: "pending",
-          escrowStatus: "pending_funding",
-          paymentStatus: "awaiting_payment",
-          writerId: null,
-          proofreaderId: null,
-          allocationStatus: "pending",
-          allocationAttempts: 0,
-          currentOfferWriterId: null,
-          offerExpiresAt: null,
-          statusHistory: [...currentHistory, resetHistoryEntry],
-          updatedAt: timestamp,
-        });
-
-        // Fire notification to customer
-        await notificationService.createNotification(
-          project.customerId,
-          "system",
-          "Assignment Reset",
-          `Your assignment "${project.title}" has been reset and is awaiting payment again.`,
-          project.id,
-          "assignment",
-          `/projects/detail?id=${project.id}`
-        );
-
-        setAdminSuccess("Assignment and escrow reset completed.");
-      }
-
-      await adminService.logPlatformAudit(
-        profile,
-        `ESCROW_${action.toUpperCase()}`,
+  // Customer dispute submission
+  const handleCustomerRaiseDispute = async () => {
+    if (!project || !customerDisputeReason.trim()) return;
+    setIsSubmittingCustomerDispute(true);
+    try {
+      await projectService.raiseDispute(
         project.id,
-        "assignment",
-        `Admin simulated ${action} for assignment "${project.title}"`
+        customerDisputeReason.trim(),
+        customerDisputeDetails.trim(),
+        customerDisputeEvidence
       );
-
+      setShowCustomerDisputeModal(false);
+      setCustomerDisputeReason("");
+      setCustomerDisputeDetails("");
+      setCustomerDisputeEvidence([]);
+      setAdminSuccess("Dispute raised. Platform administrators have been notified.");
       const updated = await projectService.getProject(project.id);
       if (updated) setProject(updated);
-    } catch (err: any) {
-      alert(err?.message || "Escrow action failed.");
+    } catch (e: any) {
+      alert("Failed to raise dispute: " + (e?.message || e));
     } finally {
-      setIsTransitioning(false);
+      setIsSubmittingCustomerDispute(false);
+    }
+  };
+
+  // Download latest authorized deliverable / workspace draft from R2
+  const handleDownloadWorkspaceDrafts = async () => {
+    if (!project) return;
+    const raw = project as any;
+    const draftDeliverable = raw.draftDeliverable || {};
+    const targetRef = raw.finalFileUrl
+      ? { url: raw.finalFileUrl, fileId: raw.proofreadFileId, storageKey: raw.proofreadStorageKey }
+      : raw.proofreadDocumentUrl
+      ? { url: raw.proofreadDocumentUrl, fileId: raw.proofreadFileId, storageKey: raw.proofreadStorageKey }
+      : draftDeliverable.fileId || draftDeliverable.storageKey || draftDeliverable.url
+      ? { fileId: draftDeliverable.fileId, storageKey: draftDeliverable.storageKey, url: draftDeliverable.url }
+      : project.files && project.files.length > 0
+      ? project.files[0]
+      : null;
+
+    if (!targetRef) {
+      alert("No workspace deliverable or source document has been uploaded yet.");
+      return;
+    }
+
+    try {
+      await storageService.openAuthorizedFile(targetRef);
+    } catch (e: any) {
+      alert("Failed to authorize download: " + (e?.message || e));
     }
   };
 
@@ -496,33 +423,128 @@ function ProjectDetailsContent() {
         <BackButton fallbackUrl="/dashboard" label="Dashboard" />
       </div>
 
-      {profile?.role === "writer" && (project.escrowStatus === "held" || project.escrowStatus === "funded") && (
-        <Alert variant="success" title="Escrow Verified">
-          🛡️ <strong>Payment Secured & Escrow Funded</strong>. Work is authorized and ready for assignment.
+      {(project.escrowStatus === "held" || project.status === "funded" || project.paymentStatus === "funded") && (
+        <Alert variant="success" title="Escrow Secured via Mobile Money">
+          🛡️ <strong>Payment Secured & Held in Escrow</strong>: <strong>K{project.budget?.toFixed(2)} ZMW</strong>. Funds remain protected until final delivery is approved.
+          {project.paymentReference && <span className="ml-2 font-mono text-xs">Ref: {project.paymentReference}</span>}
+          {project.paymentNetwork && <span className="ml-2 uppercase text-xs font-bold">({project.paymentNetwork.replace("_", " ")})</span>}
         </Alert>
       )}
 
-      {/* simulated payment confirmation modal for student */}
-      <Modal
+      {/* Zambian Mobile Money Checkout Modal via Lipila */}
+      <MobileMoneyCheckoutModal
         isOpen={showEscrowModal}
         onClose={() => setShowEscrowModal(false)}
-        title="Fund Escrow — Test Mode"
+        assignmentId={project.id}
+        assignmentTitle={project.title}
+        amount={project.budget}
+        onSuccess={async () => {
+          setAdminSuccess("Lipila Mobile Money payment confirmed! Escrow funds secured.");
+          const updated = await projectService.getProject(project.id);
+          if (updated) setProject(updated);
+        }}
+      />
+
+      {/* Revision request modal for customer */}
+      <Modal
+        isOpen={showRevisionModal}
+        onClose={() => setShowRevisionModal(false)}
+        title="Request Revisions"
         footerActions={
           <>
-            <Button variant="outline" onClick={() => setShowEscrowModal(false)}>Cancel</Button>
-            <Button variant="primary" onClick={handleStudentFundEscrow} isLoading={isTransitioning} className="bg-amber-600 hover:bg-amber-700 text-white font-bold">
-              Confirm Test Escrow Funding
+            <Button variant="outline" onClick={() => setShowRevisionModal(false)}>Cancel</Button>
+            <Button
+              variant="primary"
+              onClick={handleCustomerRequestRevision}
+              isLoading={isSubmittingRevision}
+              disabled={!revisionExplanation.trim()}
+              className="bg-amber-600 hover:bg-amber-700 text-white font-bold"
+            >
+              Submit Revision Request
             </Button>
           </>
         }
       >
         <div className="flex flex-col gap-4">
-          <Alert variant="info" title="TEST ESCROW MODE">
-            This is a simulated payment for development/testing. No real money moves.
-          </Alert>
-          <p className="text-xs text-foreground/80">
-            Confirming this will fund the test escrow of <strong>K{project.budget.toFixed(2)}</strong> for the assignment <strong>"{project.title}"</strong>.
+          <p className="text-xs text-muted-foreground">
+            Describe what modifications or clarifications are required from the assigned writer.
           </p>
+          <Textarea
+            rows={4}
+            placeholder="Specify section-by-section improvements, references to fix, or structural changes..."
+            value={revisionExplanation}
+            onChange={(e) => setRevisionExplanation(e.target.value)}
+          />
+        </div>
+      </Modal>
+
+      {/* Dispute modal for customer */}
+      <Modal
+        isOpen={showCustomerDisputeModal}
+        onClose={() => setShowCustomerDisputeModal(false)}
+        title="Raise Dispute Flag"
+        footerActions={
+          <>
+            <Button variant="outline" onClick={() => setShowCustomerDisputeModal(false)}>Cancel</Button>
+            <Button
+              variant="danger"
+              onClick={handleCustomerRaiseDispute}
+              isLoading={isSubmittingCustomerDispute}
+              disabled={!customerDisputeReason.trim()}
+              className="font-bold"
+            >
+              Raise Dispute
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-4">
+          <Alert variant="warning" title="Dispute Mediation">
+            Raising a dispute will pause automatic releases and flag this project for administrative arbitration.
+          </Alert>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-bold text-foreground">Dispute Reason</label>
+            <Textarea
+              rows={2}
+              placeholder="e.g. Incomplete submission, missed deadline, failed instructions..."
+              value={customerDisputeReason}
+              onChange={(e) => setCustomerDisputeReason(e.target.value)}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-bold text-foreground">Supporting Details</label>
+            <Textarea
+              rows={3}
+              placeholder="Provide evidence or context for administrator review..."
+              value={customerDisputeDetails}
+              onChange={(e) => setCustomerDisputeDetails(e.target.value)}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-bold text-foreground">Attach Evidence Document (Optional)</label>
+            <input
+              type="file"
+              accept=".pdf,.doc,.docx,.txt,.png,.jpg,.jpeg,.webp"
+              disabled={isUploadingDisputeFile}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleUploadDisputeEvidence(file);
+              }}
+              className="text-xs text-muted-foreground file:mr-3 file:py-1 file:px-2.5 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-primary/10 file:text-primary hover:file:bg-primary/20"
+            />
+            {isUploadingDisputeFile && (
+              <span className="text-[11px] text-primary">Uploading evidence to private R2 storage...</span>
+            )}
+            {customerDisputeEvidence.length > 0 && (
+              <div className="flex flex-col gap-1 mt-1">
+                {customerDisputeEvidence.map((ev, idx) => (
+                  <span key={ev.fileId || idx} className="text-[11px] font-mono text-success">
+                    Attached: {ev.name}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </Modal>
 
@@ -601,15 +623,13 @@ function ProjectDetailsContent() {
               </CardHeader>
               <CardContent className="flex flex-col gap-2.5">
                 {project.files.map((file: any) => (
-                  <a
+                  <AuthorizedFileLink
                     key={file.uid}
-                    href={file.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-primary hover:underline font-bold font-mono text-xs flex items-center gap-1.5"
+                    fileRef={file}
+                    className="text-primary hover:underline font-bold font-mono text-xs flex items-center gap-1.5 text-left cursor-pointer"
                   >
                     📄 {file.name} ({(file.sizeBytes / 1024 / 1024).toFixed(2)} MB)
-                  </a>
+                  </AuthorizedFileLink>
                 ))}
               </CardContent>
             </Card>
@@ -743,24 +763,24 @@ function ProjectDetailsContent() {
           {/* STUDENT ESCROW FUNDING CARD */}
           {profile?.role === "customer" && 
            (project.status === "awaiting_payment" || project.status === "draft" || project.status === "priced") && (
-            <Card className="border-amber-500/30 bg-amber-500/5 shadow-md">
-              <CardHeader className="border-b border-amber-500/10 bg-amber-500/10">
-                <CardTitle className="text-amber-700 dark:text-amber-400">🧪 Simulated Escrow Payment</CardTitle>
-                <CardDescription className="text-amber-800/80 dark:text-amber-300/80">
-                  This project requires funding to begin writer matching.
+            <Card className="border-emerald-500/30 bg-emerald-500/5 shadow-md">
+              <CardHeader className="border-b border-emerald-500/10 bg-emerald-500/10">
+                <CardTitle className="text-emerald-700 dark:text-emerald-400">📱 Mobile Money Escrow Payment</CardTitle>
+                <CardDescription className="text-emerald-800/80 dark:text-emerald-300/80">
+                  Fund this project with Airtel Money, MTN Mobile Money, or Zamtel Kwacha.
                 </CardDescription>
               </CardHeader>
               <CardContent className="pt-4 flex flex-col gap-3">
                 <p className="text-xs text-foreground font-medium">
-                  Click below to simulate funding the escrow account. No real money will be processed.
+                  Authoritative Escrow Amount: <strong>K{project.budget.toFixed(2)} ZMW</strong>. Your payment is held securely in escrow until you verify the final delivery.
                 </p>
                 <Button 
                   variant="primary" 
-                  className="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold"
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold flex items-center justify-center gap-2"
                   onClick={() => setShowEscrowModal(true)}
                   isLoading={isTransitioning}
                 >
-                  💵 Fund Escrow (Test Mode)
+                  <span>Pay with Mobile Money (Airtel / MTN / Zamtel)</span>
                 </Button>
               </CardContent>
             </Card>
@@ -773,13 +793,21 @@ function ProjectDetailsContent() {
               <CardDescription>Status milestones</CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
-              <Button variant="primary" className="w-full">
+              <Button variant="primary" className="w-full" onClick={handleDownloadWorkspaceDrafts}>
                 Download Workspace Drafts
               </Button>
-              <Button variant="outline" className="w-full bg-background">
+              <Button
+                variant="outline"
+                className="w-full bg-background"
+                onClick={() => setShowRevisionModal(true)}
+              >
                 Request Revisions
               </Button>
-              <Button variant="ghost" className="w-full text-destructive hover:bg-destructive/10">
+              <Button
+                variant="ghost"
+                className="w-full text-destructive hover:bg-destructive/10"
+                onClick={() => setShowCustomerDisputeModal(true)}
+              >
                 Raise Dispute Flag
               </Button>
             </CardContent>
@@ -823,48 +851,6 @@ function ProjectDetailsContent() {
 
                 {adminSuccess && (
                   <Alert variant="success" title="Action Completed">{adminSuccess}</Alert>
-                )}
-
-                {/* Simulated Escrow Controls */}
-                {project?.escrowMode === "simulated" && (
-                  <div className="flex flex-col gap-3 border-b border-danger/10 pb-4">
-                    <span className="text-xs font-bold uppercase tracking-wider text-amber-600">🧪 Simulated Escrow Controls</span>
-                    <div className="flex flex-col gap-2">
-                      {(project.escrowStatus === "pending_funding" || !project.escrowStatus) && (
-                        <Button variant="outline" size="sm"
-                          className="text-xs w-full border-success/40 text-success hover:bg-success/10"
-                          onClick={() => handleAdminEscrowAction("fund")}
-                          isLoading={isTransitioning}>
-                          💵 Fund Test Escrow
-                        </Button>
-                      )}
-                      {(project.escrowStatus === "funded" || project.escrowStatus === "held") && (
-                        <>
-                          <Button variant="outline" size="sm"
-                            className="text-xs w-full border-success/40 text-success hover:bg-success/10"
-                            onClick={() => handleAdminEscrowAction("release")}
-                            isLoading={isTransitioning}>
-                            ✓ Release Escrow to Writer
-                          </Button>
-                          <Button variant="outline" size="sm"
-                            className="text-xs w-full border-danger/40 text-danger hover:bg-danger/10"
-                            onClick={() => handleAdminEscrowAction("refund")}
-                            isLoading={isTransitioning}>
-                            ↩ Refund Escrow to Student
-                          </Button>
-                        </>
-                      )}
-                      {project.escrowStatus && ["released","refunded"].includes(project.escrowStatus) && (
-                        <p className="text-xs text-muted-foreground italic">Escrow has been {project.escrowStatus}.</p>
-                      )}
-                      <Button variant="outline" size="sm"
-                        className="text-xs w-full border-amber-500/40 text-amber-600 hover:bg-amber-500/10"
-                        onClick={() => handleAdminEscrowAction("reset")}
-                        isLoading={isTransitioning}>
-                        🔄 Reset Test Escrow
-                      </Button>
-                    </div>
-                  </div>
                 )}
 
                 {/* Allocation Controls */}

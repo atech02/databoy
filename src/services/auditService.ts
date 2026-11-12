@@ -1,5 +1,6 @@
-import { collection, addDoc, getDocs, query, orderBy } from "firebase/firestore";
+import { collection, getDocs, query, orderBy } from "firebase/firestore";
 import { db } from "@/config/firebase";
+import { apiClient } from "@/services/apiClient";
 import { 
   ProjectActivity, 
   UserProfile, 
@@ -37,11 +38,11 @@ export const auditService = {
   },
 
   /**
-   * Base logger helper
+   * Activity logger: persists user discussion comments via Express API and relies on server routes for system state logs.
    */
   async logActivity(projectId: string, activity: Omit<ProjectActivity, "id" | "createdAt">): Promise<ProjectActivity> {
     const newActivity: ProjectActivity = {
-      id: "", // Filled by Firestore doc
+      id: `act-${Date.now()}`,
       ...activity,
       createdAt: new Date().toISOString()
     };
@@ -51,23 +52,20 @@ export const auditService = {
       throw new Error(`Activity logger validation failed: ${errors.join(" | ")}`);
     }
 
-    try {
-      const colRef = collection(db, PROJECTS_COLLECTION, projectId, ACTIVITY_SUBCOLLECTION);
-      const docRef = await addDoc(colRef, {
-        type: newActivity.type,
-        actorId: newActivity.actorId,
-        actorName: newActivity.actorName,
-        actorRole: newActivity.actorRole,
-        message: newActivity.message,
-        metadata: newActivity.metadata || {},
-        createdAt: newActivity.createdAt
-      });
-      newActivity.id = docRef.id;
-      return newActivity;
-    } catch (error) {
-      console.error("Error committing activity audit log:", error);
-      throw error;
+    if (activity.type === "comment") {
+      const res = await apiClient.post<{ success: boolean; activity?: ProjectActivity }>(
+        `/api/assignments/${projectId}/activity`,
+        {
+          comment: activity.message,
+          actorName: activity.actorName,
+        }
+      );
+      if (res?.activity) {
+        return res.activity;
+      }
     }
+
+    return newActivity;
   },
 
   /**

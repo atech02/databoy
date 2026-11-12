@@ -31,6 +31,8 @@ import {
 } from "@/utils/lookups";
 import { projectService } from "@/services/projectService";
 import { userService } from "@/services/userService";
+import { proofreadingService, ProofreadingTaskItem } from "@/services/proofreadingService";
+import { storageService } from "@/services/storageService";
 import { seeder } from "@/utils/seeder";
 import { Project, ProjectStatus, UserAvailability, UserProfile } from "@/types/domain";
 
@@ -681,10 +683,23 @@ function CustomerDashboard({ profile, refreshProfile }: SubDashboardProps) {
   const [myResearchJobs, setMyResearchJobs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [actioning, setActioning] = useState<string | null>(null);
+  const [showDraftUploadModal, setShowDraftUploadModal] = useState(false);
+  const [draftTargetAssignmentId, setDraftTargetAssignmentId] = useState<string | null>(null);
+  const [draftSelectedFile, setDraftSelectedFile] = useState<File | null>(null);
+  const [draftNotes, setDraftNotes] = useState("");
+  const [draftUploadProgress, setDraftUploadProgress] = useState<number | null>(null);
   
   // Joint Role Claiming States
   const [unassignedProofreadTasks, setUnassignedProofreadTasks] = useState<Project[]>([]);
   const [myClaimedProofreadTasks, setMyClaimedProofreadTasks] = useState<Project[]>([]);
+
+  // Authoritative Wallet & Payout States (Phase 4)
+  const [wallet, setWallet] = useState<any>(null);
+  const [showPayoutModal, setShowPayoutModal] = useState(false);
+  const [payoutAmount, setPayoutAmount] = useState("");
+  const [payoutMethod, setPayoutMethod] = useState("airtel_money");
+  const [payoutAccount, setPayoutAccount] = useState("");
+  const [isSubmittingPayout, setIsSubmittingPayout] = useState(false);
 
   const verification = profile.verificationStatus || "draft";
   const isEligible = 
@@ -728,6 +743,16 @@ function CustomerDashboard({ profile, refreshProfile }: SubDashboardProps) {
       const { researchService } = await import("@/services/researchService");
       const researchJobs = await researchService.listResearchRequests({ assignedWriterId: profile.uid });
       setMyResearchJobs(researchJobs);
+
+      // 4. Fetch authoritative wallet and ledger earnings
+      try {
+        const earningsRes = await userService.getWriterEarnings();
+        if (earningsRes && earningsRes.wallet) {
+          setWallet(earningsRes.wallet);
+        }
+      } catch (earnErr) {
+        console.warn("Could not fetch backend writer earnings:", earnErr);
+      }
     } catch (err) {
       console.error(err);
     } finally {
@@ -746,6 +771,11 @@ function CustomerDashboard({ profile, refreshProfile }: SubDashboardProps) {
     }
     setActioning(id);
     try {
+      try {
+        await projectService.claimViaApi(id);
+      } catch (backendErr) {
+        console.warn("Backend claim API info:", backendErr);
+      }
       await projectService.transitionProjectStatus(id, "assigned", profile, {
         writerId: profile.uid
       });
@@ -769,28 +799,47 @@ function CustomerDashboard({ profile, refreshProfile }: SubDashboardProps) {
     }
   };
 
-  const handleSubmitDraft = async (id: string) => {
-    setActioning(id);
-    try {
-      const timestamp = new Date().toISOString();
-      const mockFiles = [
-        {
-          uid: `file-${Math.floor(1000 + Math.random() * 9000)}`,
-          name: `Project_Deliverable_Draft_${id}.pdf`,
-          url: "https://firebasestorage.googleapis.com/v0/b/databoy-dev.appspot.com/o/mock%2Fdegree_cert.pdf",
-          uploadedBy: profile.uid,
-          uploadedAt: timestamp,
-          sizeBytes: 254209
-        }
-      ];
+  const handleSubmitDraft = (id: string) => {
+    setDraftTargetAssignmentId(id);
+    setDraftSelectedFile(null);
+    setDraftNotes("");
+    setDraftUploadProgress(null);
+    setShowDraftUploadModal(true);
+  };
 
-      await projectService.transitionProjectStatus(id, "draft_submitted", profile, {
-        files: mockFiles
-      });
+  const handleConfirmDraftUpload = async () => {
+    if (!draftTargetAssignmentId || !draftSelectedFile) return;
+    const id = draftTargetAssignmentId;
+    setActioning(id);
+    setDraftUploadProgress(0);
+    try {
+      const uploadRes = await storageService.uploadFile(
+        "draft",
+        id,
+        draftSelectedFile,
+        (prog) => setDraftUploadProgress(prog)
+      );
+
+      await projectService.submitDraftViaApi(
+        id,
+        uploadRes.url,
+        draftNotes.trim() || "Deliverable draft uploaded by writer.",
+        {
+          fileId: uploadRes.fileId,
+          storageKey: uploadRes.storageKey,
+          fileName: uploadRes.fileName,
+        }
+      );
+
+      setShowDraftUploadModal(false);
+      setDraftTargetAssignmentId(null);
+      setDraftSelectedFile(null);
+      setDraftNotes("");
       await loadWriterData();
     } catch (err: any) {
-      alert(`Submission failed: ${err?.message}`);
+      alert(`Submission failed: ${err?.message || err}`);
     } finally {
+      setDraftUploadProgress(null);
       setActioning(null);
     }
   };
@@ -839,6 +888,37 @@ function CustomerDashboard({ profile, refreshProfile }: SubDashboardProps) {
 
   const getProjectTypeLabel = (val?: string) => {
     return PROJECT_TYPES.find(p => p.value === val)?.label || val || "Other";
+  };
+
+  const handleRequestPayout = async () => {
+    const amt = parseFloat(payoutAmount);
+    if (isNaN(amt) || amt < 50) {
+      alert("Minimum payout request is 50 ZMW.");
+      return;
+    }
+    const currentBal = wallet?.availableBalance ?? (profile.availableBalance || 0);
+    if (amt > currentBal) {
+      alert(`Insufficient funds. Your available balance is K${currentBal.toFixed(2)}.`);
+      return;
+    }
+    if (!payoutAccount.trim()) {
+      alert("Please enter your mobile money number or bank details.");
+      return;
+    }
+    setIsSubmittingPayout(true);
+    try {
+      await userService.requestPayout(amt, payoutMethod, { accountNumber: payoutAccount.trim() });
+      setShowPayoutModal(false);
+      setPayoutAmount("");
+      setPayoutAccount("");
+      alert("Payout request submitted successfully. Awaiting administrator approval.");
+      await loadWriterData();
+      if (refreshProfile) await refreshProfile();
+    } catch (e: any) {
+      alert("Payout request failed: " + (e?.message || e));
+    } finally {
+      setIsSubmittingPayout(false);
+    }
   };
 
   const activeDrafting = myJobs.filter(a => ["assigned", "in_progress", "draft_submitted", "review_rejected"].includes(a.status));
@@ -1335,26 +1415,51 @@ function CustomerDashboard({ profile, refreshProfile }: SubDashboardProps) {
         )}
       </div>
 
-      {/* 5. Earnings & Performance Metrics (Revision 6) */}
+      {/* 5. Authoritative Wallet & Performance Metrics (Phase 4) */}
       <div className="flex flex-col gap-3 border-t border-border/20 pt-6">
-        <h2 className="text-base font-black tracking-tight text-foreground">📈 Performance & Reputation Metrics</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="flex justify-between items-center">
+          <h2 className="text-base font-black tracking-tight text-foreground">💼 Wallet & Authoritative Ledger</h2>
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => setShowPayoutModal(true)}
+            className="text-xs font-bold"
+          >
+            💸 Request Payout
+          </Button>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
           <Card className="border border-border/40 bg-card">
             <CardContent className="pt-5 flex justify-between items-center">
               <div>
-                <span className="text-[10px] font-bold uppercase text-muted-foreground">Active Workload</span>
-                <div className="text-xl font-black text-foreground mt-1">{activeCount}</div>
+                <span className="text-[10px] font-bold uppercase text-muted-foreground">Available Balance</span>
+                <div className="text-xl font-black text-success mt-1">
+                  K{(wallet?.availableBalance ?? (profile.availableBalance || 0)).toFixed(2)}
+                </div>
               </div>
-              <div className="text-2xl bg-secondary/80 p-2 rounded-lg">⚡</div>
+              <div className="text-2xl bg-secondary/80 p-2 rounded-lg">💰</div>
             </CardContent>
           </Card>
           <Card className="border border-border/40 bg-card">
             <CardContent className="pt-5 flex justify-between items-center">
               <div>
-                <span className="text-[10px] font-bold uppercase text-muted-foreground">Released Revenue</span>
-                <div className="text-xl font-black text-success mt-1">K{earningsSum.toFixed(2)}</div>
+                <span className="text-[10px] font-bold uppercase text-muted-foreground">Pending Escrow</span>
+                <div className="text-xl font-black text-warning mt-1">
+                  K{(wallet?.pendingBalance ?? 0).toFixed(2)}
+                </div>
               </div>
-              <div className="text-2xl bg-secondary/80 p-2 rounded-lg">💰</div>
+              <div className="text-2xl bg-secondary/80 p-2 rounded-lg">⏳</div>
+            </CardContent>
+          </Card>
+          <Card className="border border-border/40 bg-card">
+            <CardContent className="pt-5 flex justify-between items-center">
+              <div>
+                <span className="text-[10px] font-bold uppercase text-muted-foreground">Total Paid Out</span>
+                <div className="text-xl font-black text-foreground mt-1">
+                  K{(wallet?.totalPaidOut ?? (profile.totalPaidOut || 0)).toFixed(2)}
+                </div>
+              </div>
+              <div className="text-2xl bg-secondary/80 p-2 rounded-lg">🏦</div>
             </CardContent>
           </Card>
           <Card className="border border-border/40 bg-card">
@@ -1368,6 +1473,115 @@ function CustomerDashboard({ profile, refreshProfile }: SubDashboardProps) {
           </Card>
         </div>
       </div>
+
+      {/* Submit Deliverable Draft Modal (Cloudflare R2) */}
+      <Modal
+        isOpen={showDraftUploadModal}
+        onClose={() => {
+          if (draftUploadProgress === null) setShowDraftUploadModal(false);
+        }}
+        title="Submit Deliverable Draft"
+        footerActions={
+          <>
+            <Button
+              variant="outline"
+              disabled={draftUploadProgress !== null}
+              onClick={() => setShowDraftUploadModal(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              onClick={handleConfirmDraftUpload}
+              isLoading={actioning !== null}
+              disabled={!draftSelectedFile || draftUploadProgress !== null}
+            >
+              Upload & Submit Draft
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-bold text-foreground">Deliverable File (.pdf, .doc, .docx)</label>
+            <input
+              type="file"
+              accept=".pdf,.doc,.docx"
+              disabled={draftUploadProgress !== null}
+              onChange={(e) => setDraftSelectedFile(e.target.files?.[0] || null)}
+              className="text-xs text-muted-foreground file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-primary/10 file:text-primary hover:file:bg-primary/20"
+            />
+          </div>
+          <Input
+            label="Submission Notes (Optional)"
+            placeholder="Summary of completed deliverable or citations checked..."
+            value={draftNotes}
+            onChange={(e) => setDraftNotes(e.target.value)}
+          />
+          {draftUploadProgress !== null && (
+            <span className="text-xs font-bold text-primary">
+              Uploading deliverable to private R2 storage... {draftUploadProgress}%
+            </span>
+          )}
+        </div>
+      </Modal>
+
+      {/* Payout Request Modal */}
+      <Modal
+        isOpen={showPayoutModal}
+        onClose={() => setShowPayoutModal(false)}
+        title="Request Earnings Payout"
+        footerActions={
+          <>
+            <Button variant="outline" onClick={() => setShowPayoutModal(false)}>Cancel</Button>
+            <Button
+              variant="primary"
+              onClick={handleRequestPayout}
+              isLoading={isSubmittingPayout}
+              className="font-bold"
+            >
+              Submit Request
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-4">
+          <Alert variant="info" title="Authoritative Ledger Release">
+            Payout requests are audited against backend ledger transactions. Minimum withdrawal amount is K50.00.
+          </Alert>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-bold text-foreground">Withdrawal Amount (ZMW)</label>
+            <Input
+              type="number"
+              placeholder="e.g. 150"
+              value={payoutAmount}
+              onChange={(e) => setPayoutAmount(e.target.value)}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-bold text-foreground">Payment Method</label>
+            <Select
+              value={payoutMethod}
+              onChange={(e) => setPayoutMethod(e.target.value)}
+              options={[
+                { value: "airtel_money", label: "Airtel Money" },
+                { value: "mtn_money", label: "MTN Mobile Money" },
+                { value: "zamtel_kwacha", label: "Zamtel Kwacha" },
+                { value: "bank_transfer", label: "Bank Transfer" },
+              ]}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-bold text-foreground">Account / Phone Number</label>
+            <Input
+              type="text"
+              placeholder="+260 97X XXX XXX"
+              value={payoutAccount}
+              onChange={(e) => setPayoutAccount(e.target.value)}
+            />
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
@@ -1381,6 +1595,11 @@ function ProofreaderDashboard({ profile, refreshProfile }: SubDashboardProps) {
   const [myReviews, setMyReviews] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [actioning, setActioning] = useState<string | null>(null);
+  const [showDraftUploadModal, setShowDraftUploadModal] = useState(false);
+  const [draftTargetAssignmentId, setDraftTargetAssignmentId] = useState<string | null>(null);
+  const [draftSelectedFile, setDraftSelectedFile] = useState<File | null>(null);
+  const [draftNotes, setDraftNotes] = useState("");
+  const [draftUploadProgress, setDraftUploadProgress] = useState<number | null>(null);
 
   const loadProofreaderData = async () => {
     setLoading(true);

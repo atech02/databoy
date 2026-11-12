@@ -12,17 +12,14 @@
  */
 
 import {
-  doc,
-  updateDoc,
   getDocs,
   collection,
   query,
   where,
 } from "firebase/firestore";
 import { db } from "@/config/firebase";
+import { apiClient } from "@/services/apiClient";
 import { Project, UserProfile } from "@/types/domain";
-import { notificationService } from "./notificationService";
-import { adminService } from "./adminService";
 
 // ---------------------------------------------------------------------------
 // CONFIGURATION
@@ -130,41 +127,17 @@ export const allocationService = {
   },
 
   /**
-   * Offer a project to a specific writer with a timeout.
-   * Updates the project document with offer metadata.
+   * Offer a project to a specific writer via backend admin allocation endpoint.
    */
   async offerProjectToWriter(
     project: Project,
     writerId: string,
-    adminProfile: UserProfile
+    _adminProfile: UserProfile
   ): Promise<void> {
-    const expiresAt = new Date(Date.now() + OFFER_TIMEOUT_MS).toISOString();
-    const projRef = doc(db, "assignments", project.id);
-
-    await updateDoc(projRef, {
-      allocationStatus: "offered",
-      currentOfferWriterId: writerId,
-      offerExpiresAt: expiresAt,
-      allocationAttempts: (project.allocationAttempts || 0) + 1,
-      updatedAt: new Date().toISOString(),
+    await apiClient.post(`/api/assignments/${project.id}/allocate`, {
+      mode: "offer",
+      candidateWriterId: writerId,
     });
-
-    // Notify the writer
-    await notificationService.notifyWriterOffered(
-      writerId,
-      project.id,
-      project.title,
-      OFFER_TIMEOUT_MINUTES
-    );
-
-    // Log the allocation offer in platform audit
-    await adminService.logPlatformAudit(
-      adminProfile,
-      "WRITER_OFFERED",
-      project.id,
-      "assignment",
-      `Writer [${writerId}] offered assignment "${project.title}" (attempt #${(project.allocationAttempts || 0) + 1}). Expires: ${expiresAt}`
-    );
   },
 
   /**
@@ -218,17 +191,8 @@ export const allocationService = {
       return { escalated: false, movedToPool: false, message: `Offer still active. ${remaining} minutes remaining.` };
     }
 
-    // Timeout occurred — notify admins
+    // Timeout occurred — escalate via backend admin allocation endpoint
     const attempts = project.allocationAttempts || 1;
-    const adminIds = await this.getAdminIds();
-    await notificationService.notifyWriterTimeout(adminIds, project.id, project.title, attempts);
-    await adminService.logPlatformAudit(
-      adminProfile,
-      "WRITER_TIMEOUT",
-      project.id,
-      "assignment",
-      `Writer offer timed out for "${project.title}" (attempt #${attempts}).`
-    );
 
     // Check if we should try next writer or move to pool
     if (attempts >= MAX_ALLOCATION_ATTEMPTS) {
@@ -251,33 +215,16 @@ export const allocationService = {
   },
 
   /**
-   * Move project to general pool — first-come-first-serve among eligible writers.
+   * Move project to general pool via backend admin allocation endpoint.
    */
   async moveToPool(
     project: Project,
-    adminProfile: UserProfile,
-    eligibleWriterIds: string[]
+    _adminProfile: UserProfile,
+    _eligibleWriterIds: string[]
   ): Promise<void> {
-    const projRef = doc(db, "assignments", project.id);
-    await updateDoc(projRef, {
-      allocationStatus: "pool",
-      currentOfferWriterId: null,
-      offerExpiresAt: null,
-      updatedAt: new Date().toISOString(),
+    await apiClient.post(`/api/assignments/${project.id}/allocate`, {
+      mode: "open_pool",
     });
-
-    // Notify eligible writers
-    if (eligibleWriterIds.length > 0) {
-      await notificationService.notifyPoolOpened(eligibleWriterIds, project.id, project.title);
-    }
-
-    await adminService.logPlatformAudit(
-      adminProfile,
-      "ASSIGNMENT_POOL_OPENED",
-      project.id,
-      "assignment",
-      `Assignment "${project.title}" moved to general pool after ${project.allocationAttempts || 0} allocation attempt(s).`
-    );
   },
 
   /** Helper: get all admin UIDs */

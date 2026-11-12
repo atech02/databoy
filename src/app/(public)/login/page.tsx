@@ -12,13 +12,14 @@ import { BackButton } from "@/components/ui/BackButton";
 import { useTheme } from "@/hooks/useTheme";
 
 export default function Login() {
-  const { loginWithGoogle, loginWithEmail, user } = useAuth();
+  const { loginWithGoogle, loginWithEmail, sendPasswordReset, user } = useAuth();
   const { isDark } = useTheme();
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resetMessage, setResetMessage] = useState<string | null>(null);
 
   // If already authenticated, redirect to dashboard
   React.useEffect(() => {
@@ -44,11 +45,30 @@ export default function Login() {
   const handleGoogleLogin = async () => {
     setLoading(true);
     setError(null);
+    setResetMessage(null);
     try {
       await loginWithGoogle();
       router.push("/dashboard");
     } catch (err: any) {
       setError(err?.message || "Google sign-in was canceled.");
+      setLoading(false);
+    }
+  };
+
+  const handlePasswordReset = async () => {
+    setError(null);
+    setResetMessage(null);
+    if (!email.trim()) {
+      setError("Enter your email address first, then click Forgot password?");
+      return;
+    }
+    setLoading(true);
+    try {
+      await sendPasswordReset(email.trim());
+      setResetMessage("If an account exists for that email, a password reset link has been sent.");
+    } catch (err: any) {
+      setError(err?.message || "Could not process password recovery request.");
+    } finally {
       setLoading(false);
     }
   };
@@ -89,6 +109,12 @@ export default function Login() {
                 </Alert>
               )}
 
+              {resetMessage && (
+                <Alert variant="success" title="Password Recovery">
+                  {resetMessage}
+                </Alert>
+              )}
+
               <Input
                 label="Email Address"
                 type="email"
@@ -108,9 +134,14 @@ export default function Login() {
               />
 
               <div className="flex justify-end">
-                <a href="#" className="text-xs font-semibold text-primary hover:underline">
+                <button
+                  type="button"
+                  onClick={handlePasswordReset}
+                  disabled={loading}
+                  className="text-xs font-semibold text-primary hover:underline cursor-pointer"
+                >
                   Forgot password?
-                </a>
+                </button>
               </div>
 
               <Button variant="primary" type="submit" isLoading={loading} className="w-full mt-2">

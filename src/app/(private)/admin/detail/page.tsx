@@ -12,6 +12,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter }
 import { Badge } from "@/components/ui/Badge";
 import { Alert } from "@/components/ui/Alert";
 import { Loader } from "@/components/ui/Loader";
+import { AuthorizedFileLink } from "@/components/ui/AuthorizedFileLink";
 import { UNIVERSITIES, FACULTIES, MAJORS } from "@/utils/lookups";
 import { UserProfile, UserStatus, VerificationStatus } from "@/types/domain";
 
@@ -566,14 +567,12 @@ export default function AdminDetailPage() {
                           <span className="text-[10px] text-muted-foreground font-medium">Verify validity of major and graduation year</span>
                         </div>
                         {userProfile.academic?.documents?.degreeCertificateUrl ? (
-                          <a 
-                            href={userProfile.academic.documents.degreeCertificateUrl} 
-                            target="_blank" 
-                            rel="noreferrer" 
-                            className="bg-primary/10 text-primary border border-primary/20 px-3 py-1.5 rounded-lg font-bold hover:bg-primary/20 transition-all select-none"
+                          <AuthorizedFileLink
+                            fileRef={{ url: userProfile.academic.documents.degreeCertificateUrl }}
+                            className="bg-primary/10 text-primary border border-primary/20 px-3 py-1.5 rounded-lg font-bold hover:bg-primary/20 transition-all select-none cursor-pointer"
                           >
                             Open Scan
-                          </a>
+                          </AuthorizedFileLink>
                         ) : (
                           <Badge variant="danger" className="text-[10px]">No File Uploaded</Badge>
                         )}
@@ -586,14 +585,12 @@ export default function AdminDetailPage() {
                           <span className="text-[10px] text-muted-foreground font-medium">Verify GPA and specific courses taken</span>
                         </div>
                         {userProfile.academic?.documents?.transcriptUrl ? (
-                          <a 
-                            href={userProfile.academic.documents.transcriptUrl} 
-                            target="_blank" 
-                            rel="noreferrer" 
-                            className="bg-primary/10 text-primary border border-primary/20 px-3 py-1.5 rounded-lg font-bold hover:bg-primary/20 transition-all select-none"
+                          <AuthorizedFileLink
+                            fileRef={{ url: userProfile.academic.documents.transcriptUrl }}
+                            className="bg-primary/10 text-primary border border-primary/20 px-3 py-1.5 rounded-lg font-bold hover:bg-primary/20 transition-all select-none cursor-pointer"
                           >
                             Open Scan
-                          </a>
+                          </AuthorizedFileLink>
                         ) : (
                           <Badge variant="danger" className="text-[10px]">No File Uploaded</Badge>
                         )}
@@ -606,14 +603,12 @@ export default function AdminDetailPage() {
                             <span className="font-bold text-foreground">3. Curriculum Vitae (Optional)</span>
                             <span className="text-[10px] text-muted-foreground font-medium">Verify professional work experience</span>
                           </div>
-                          <a 
-                            href={userProfile.academic.documents.cvUrl} 
-                            target="_blank" 
-                            rel="noreferrer" 
-                            className="bg-secondary text-foreground border border-border px-3 py-1.5 rounded-lg font-bold hover:bg-secondary/80 transition-all select-none"
+                          <AuthorizedFileLink
+                            fileRef={{ url: userProfile.academic.documents.cvUrl }}
+                            className="bg-secondary text-foreground border border-border px-3 py-1.5 rounded-lg font-bold hover:bg-secondary/80 transition-all select-none cursor-pointer"
                           >
                             Open File
-                          </a>
+                          </AuthorizedFileLink>
                         </div>
                       )}
 
@@ -624,14 +619,12 @@ export default function AdminDetailPage() {
                             <span className="font-bold text-foreground">4. Professional Certifications (Optional)</span>
                             <span className="text-[10px] text-muted-foreground font-medium">Verify additional professional expertise</span>
                           </div>
-                          <a 
-                            href={userProfile.academic.documents.certificationsUrl} 
-                            target="_blank" 
-                            rel="noreferrer" 
-                            className="bg-secondary text-foreground border border-border px-3 py-1.5 rounded-lg font-bold hover:bg-secondary/80 transition-all select-none"
+                          <AuthorizedFileLink
+                            fileRef={{ url: userProfile.academic.documents.certificationsUrl }}
+                            className="bg-secondary text-foreground border border-border px-3 py-1.5 rounded-lg font-bold hover:bg-secondary/80 transition-all select-none cursor-pointer"
                           >
                             Open File
-                          </a>
+                          </AuthorizedFileLink>
                         </div>
                       )}
 
@@ -642,14 +635,12 @@ export default function AdminDetailPage() {
                             <span className="font-bold text-foreground">5. Academic Publications (Optional)</span>
                             <span className="text-[10px] text-muted-foreground font-medium">Verify published academic works</span>
                           </div>
-                          <a 
-                            href={userProfile.academic.documents.publicationsUrl} 
-                            target="_blank" 
-                            rel="noreferrer" 
-                            className="bg-secondary text-foreground border border-border px-3 py-1.5 rounded-lg font-bold hover:bg-secondary/80 transition-all select-none"
+                          <AuthorizedFileLink
+                            fileRef={{ url: userProfile.academic.documents.publicationsUrl }}
+                            className="bg-secondary text-foreground border border-border px-3 py-1.5 rounded-lg font-bold hover:bg-secondary/80 transition-all select-none cursor-pointer"
                           >
                             Open File
-                          </a>
+                          </AuthorizedFileLink>
                         </div>
                       )}
 
@@ -660,14 +651,12 @@ export default function AdminDetailPage() {
                             <span className="font-bold text-foreground">6. Supporting Documents (Optional)</span>
                             <span className="text-[10px] text-muted-foreground font-medium">Verify additional credentials</span>
                           </div>
-                          <a 
-                            href={userProfile.academic.documents.supportingDocsUrl} 
-                            target="_blank" 
-                            rel="noreferrer" 
-                            className="bg-secondary text-foreground border border-border px-3 py-1.5 rounded-lg font-bold hover:bg-secondary/80 transition-all select-none"
+                          <AuthorizedFileLink
+                            fileRef={{ url: userProfile.academic.documents.supportingDocsUrl }}
+                            className="bg-secondary text-foreground border border-border px-3 py-1.5 rounded-lg font-bold hover:bg-secondary/80 transition-all select-none cursor-pointer"
                           >
                             Open File
-                          </a>
+                          </AuthorizedFileLink>
                         </div>
                       )}
 

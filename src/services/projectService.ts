@@ -2,15 +2,12 @@ import {
   doc, 
   getDoc, 
   setDoc, 
-  updateDoc, 
   query, 
   collection, 
   where, 
-  getDocs, 
-  runTransaction 
+  getDocs 
 } from "firebase/firestore";
-import { httpsCallable } from "firebase/functions";
-import { db, functions } from "@/config/firebase";
+import { db } from "@/config/firebase";
 import { 
   Project, 
   ProjectStatus, 
@@ -20,26 +17,9 @@ import {
 import { validateProject } from "@/utils/validation";
 import { auditService } from "./auditService";
 import { userService } from "./userService";
+import { apiClient } from "./apiClient";
 
 const PROJECTS_COLLECTION = "assignments"; // Must be 'assignments' to comply with firestore.rules
-
-// Valid transition mapping matrix
-const VALID_TRANSITIONS: Record<ProjectStatus, ProjectStatus[]> = {
-  draft: ["priced", "awaiting_payment", "unassigned", "cancelled"],
-  priced: ["awaiting_payment", "cancelled"],
-  awaiting_payment: ["funded", "cancelled"],
-  funded: ["awaiting_assignment", "cancelled"],
-  awaiting_assignment: ["assigned", "cancelled"],
-  unassigned: ["assigned", "cancelled", "awaiting_payment", "awaiting_assignment"],
-  assigned: ["in_progress", "cancelled"],
-  in_progress: ["draft_submitted", "cancelled", "disputed"],
-  draft_submitted: ["under_review", "disputed"],
-  under_review: ["completed", "review_rejected", "disputed"],
-  review_rejected: ["in_progress", "disputed"],
-  completed: [], // Terminal state
-  disputed: ["under_review", "completed", "cancelled"], // Admin mediation routes
-  cancelled: [] // Terminal state
-};
 
 export const projectService = {
   /**
@@ -66,7 +46,7 @@ export const projectService = {
   /**
    * Deploys a new project pipeline with inputs validation
    */
-  async createProject(project: Omit<Project, "id" | "status" | "payoutStatus" | "writerId" | "proofreaderId" | "files" | "createdAt" | "updatedAt"> & { id?: string; status?: ProjectStatus }): Promise<Project> {
+  async createProject(project: Omit<Project, "id" | "status" | "payoutStatus" | "writerId" | "proofreaderId" | "files" | "createdAt" | "updatedAt"> & { id?: string; status?: ProjectStatus; files?: any[] }): Promise<Project> {
     const id = project.id || `PRJ-${Math.floor(1000 + Math.random() * 9000)}`;
     const timestamp = new Date().toISOString();
 
@@ -102,14 +82,38 @@ export const projectService = {
       throw new Error(`Project pipeline validation failed: ${errors.join(" | ")}`);
     }
 
-    try {
-      const docRef = doc(db, PROJECTS_COLLECTION, id);
-      await setDoc(docRef, newProject);
-      return newProject;
-    } catch (error) {
-      console.error("Error creating project:", error);
-      throw error;
+    // Authoritative server-side assignment creation (C-1: no client setDoc fallback)
+    const apiRes = await apiClient.post<{
+      success: boolean;
+      assignmentId: string;
+      budget: number;
+      pricingBreakdown: any;
+    }>("/api/assignments", {
+      title: project.title,
+      description: project.guidelines || "Standard academic guidelines",
+      academicLevel: project.academicLevel || "degree",
+      subject: project.subject || "general",
+      deadline: project.deadline,
+      pageCount: project.pageCount,
+      wordCount: project.wordCount,
+      serviceType: project.projectType || "assignment",
+      referencingStyle: project.referencingStyle,
+      files: project.files || [],
+    });
+
+    if (!apiRes?.assignmentId) {
+      throw new Error("Assignment creation failed: server did not return an assignment ID.");
     }
+
+    const fetched = await this.getProject(apiRes.assignmentId);
+    if (fetched) return fetched;
+
+    return {
+      ...newProject,
+      id: apiRes.assignmentId,
+      budget: apiRes.budget,
+      pricingBreakdown: apiRes.pricingBreakdown,
+    };
   },
 
   /**
@@ -200,8 +204,9 @@ export const projectService = {
   },
 
   /**
-   * Central Transactional State Transition Engine.
-   * Enforces transition constraints, validates actor roles, and commits audit logs atomically.
+   * Central Status Transition Engine (Express Backend Only).
+   * Rejects direct client/Cloud-Function workflow mutations; all state & escrow
+   * transitions must pass through authenticated Express API routes.
    */
   async transitionProjectStatus(
     projectId: string,
@@ -209,190 +214,91 @@ export const projectService = {
     actor: UserProfile,
     updates: Partial<Omit<Project, "id" | "status" | "createdAt" | "updatedAt">> = {}
   ): Promise<void> {
-    const docRef = doc(db, PROJECTS_COLLECTION, projectId);
-    let prevStatus: ProjectStatus = "unassigned";
-
-    // For non-admin users, sensitive status and escrow updates are executed by Cloud Functions
-    if (actor.role !== "admin") {
-      try {
-        if (nextStatus === "funded") {
-          const fn = httpsCallable(functions, "fundassignment");
-          await fn({ projectId });
-          await auditService.logStatusChange(projectId, actor, prevStatus, nextStatus);
-          return;
-        } else if (nextStatus === "assigned") {
-          const fn = httpsCallable(functions, "claimassignment");
-          await fn({ projectId });
-          await auditService.logStatusChange(projectId, actor, prevStatus, nextStatus);
-          return;
-        } else if (nextStatus === "draft_submitted") {
-          const fn = httpsCallable(functions, "submitassignmentdraft");
-          await fn({ projectId, files: updates.files });
-          await auditService.logStatusChange(projectId, actor, prevStatus, nextStatus);
-          return;
-        } else if (nextStatus === "under_review") {
-          const fn = httpsCallable(functions, "claimproofreadreview");
-          await fn({ projectId });
-          await auditService.logStatusChange(projectId, actor, prevStatus, nextStatus);
-          return;
-        } else if (nextStatus === "review_rejected") {
-          const fn = httpsCallable(functions, "rejectproofreadreview");
-          await fn({ projectId, reason: "Draft rejected by reviewer" });
-          await auditService.logStatusChange(projectId, actor, prevStatus, nextStatus);
-          return;
-        } else if (nextStatus === "completed") {
-          const fn = httpsCallable(functions, "completeassignment");
-          await fn({ projectId });
-          await auditService.logStatusChange(projectId, actor, prevStatus, nextStatus);
-          return;
-        } else if (nextStatus === "cancelled") {
-          const fn = httpsCallable(functions, "cancelassignment");
-          await fn({ projectId, reason: "Cancelled by user" });
-          await auditService.logStatusChange(projectId, actor, prevStatus, nextStatus);
-          return;
-        }
-      } catch (cloudFnError: any) {
-        // If Cloud Functions are unavailable in local offline mode, fallback to client transaction
-        console.warn("Cloud function transition returned error or unavailable, attempting transaction fallback:", cloudFnError);
-      }
+    if (nextStatus === "funded") {
+      throw new Error(
+        "Direct assignment funding is disabled. Use Lipila Mobile Money checkout (/api/payments/initiate)."
+      );
     }
 
-    try {
-      await runTransaction(db, async (transaction) => {
-        const docSnap = await transaction.get(docRef);
+    const prevStatus: ProjectStatus = "unassigned";
 
-        if (!docSnap.exists()) {
-          throw new Error("Project document does not exist.");
-        }
-
-        const proj = docSnap.data() as Project;
-        prevStatus = proj.status;
-
-        // 1. Verify transition constraints
-        const allowedNextStates = VALID_TRANSITIONS[prevStatus] || [];
-        if (actor.role !== "admin" && !allowedNextStates.includes(nextStatus)) {
-          throw new Error(`Invalid status transition: cannot move project from [${prevStatus}] to [${nextStatus}].`);
-        }
-
-        // 2. Validate actor roles per transition
-        this.enforceRolePrivileges(prevStatus, nextStatus, actor, proj);
-
-        // 3. Prepare next state updates
-        const timestamp = new Date().toISOString();
-        
-        let note = "";
-        if (nextStatus === "funded") {
-          note = "Test escrow funded: payment secured.";
-        } else if (nextStatus === "awaiting_assignment") {
-          note = "Assignment moved to awaiting assignment queue.";
-        } else if (nextStatus === "completed") {
-          note = "Test escrow released: payment paid to writer.";
-        } else if (nextStatus === "cancelled") {
-          note = "Test escrow refunded: payment returned to student.";
-        } else if (nextStatus === "assigned") {
-          note = "Writer assigned and matched to task.";
-        } else if (nextStatus === "in_progress") {
-          note = "Writer started working on the draft.";
-        } else if (nextStatus === "draft_submitted") {
-          note = "Writer submitted a draft for review.";
-        } else if (nextStatus === "under_review") {
-          note = "Draft is currently under peer proofreading review.";
-        } else if (nextStatus === "review_rejected") {
-          note = "Draft rejected and returned to writer for revision.";
-        }
-
-        const nextHistoryEntry = {
-          status: nextStatus,
-          actorId: actor.uid,
-          actorName: actor.displayName,
-          actorRole: actor.role,
-          timestamp,
-          note
-        };
-        const currentHistory = proj.statusHistory || [];
-
-        const payload: Partial<Project> = {
-          ...updates,
-          status: nextStatus,
-          statusHistory: [...currentHistory, nextHistoryEntry],
-          updatedAt: timestamp
-        };
-
-        // Automate Payout transitions matching state
-        if (nextStatus === "assigned" && proj.payoutStatus === "pending") {
-          payload.payoutStatus = "escrowed"; // Move budget to Escrow upon claim
-        } else if (nextStatus === "completed" && proj.payoutStatus === "escrowed") {
-          payload.payoutStatus = "released"; // Release payment to specialist upon approval
-        } else if (nextStatus === "cancelled" && proj.payoutStatus === "escrowed") {
-          payload.payoutStatus = "refunded"; // Refund customer if project cancelled
-        }
-
-        // 4. Commit status update atomically
-        transaction.update(docRef, payload);
-      });
-
-      // 5. Automatically log the activity
+    if (nextStatus === "assigned") {
+      await apiClient.post(`/api/assignments/${projectId}/claim`);
       await auditService.logStatusChange(projectId, actor, prevStatus, nextStatus);
-
-    } catch (error) {
-      console.error("Transactional state transition aborted:", error);
-      throw error;
+      return;
+    } else if (nextStatus === "draft_submitted") {
+      await apiClient.post(`/api/assignments/${projectId}/submit-draft`, {
+        fileUrl: updates.files?.[0]?.url || "",
+        notes: "Draft submitted for review",
+      });
+      await auditService.logStatusChange(projectId, actor, prevStatus, nextStatus);
+      return;
+    } else if (nextStatus === "under_review") {
+      await apiClient.post(`/api/assignments/${projectId}/claim-review`);
+      await auditService.logStatusChange(projectId, actor, prevStatus, nextStatus);
+      return;
+    } else if (nextStatus === "review_rejected") {
+      await apiClient.post(`/api/assignments/${projectId}/reject-review`, {
+        feedback: "Draft revision requested",
+      });
+      await auditService.logStatusChange(projectId, actor, prevStatus, nextStatus);
+      return;
+    } else if (nextStatus === "completed") {
+      await apiClient.post(`/api/assignments/${projectId}/approve`, {
+        finalFileUrl: updates.files?.[0]?.url || "",
+        notes: "Approved and completed",
+      });
+      await auditService.logStatusChange(projectId, actor, prevStatus, nextStatus);
+      return;
     }
+
+    throw new Error(
+      `Unsupported client status transition to '${nextStatus}'. Use the authoritative Express backend API.`
+    );
   },
 
-  /**
-   * Enforces domain role privileges for status transitions
-   */
-  enforceRolePrivileges(
-    prev: ProjectStatus, 
-    next: ProjectStatus, 
-    actor: UserProfile, 
-    proj: Project
-  ): void {
-    // Admins bypass all role validation checks
-    if (actor.role === "admin") return;
+  // ---------------------------------------------------------------------------
+  // BACKEND API INTEGRATIONS (Phase 4)
+  // ---------------------------------------------------------------------------
 
-    // Check customer-owned pipelines
-    if (next === "cancelled" || next === "unassigned" || next === "funded" || next === "awaiting_assignment" || next === "awaiting_payment") {
-      if (actor.role !== "customer" || actor.uid !== proj.customerId) {
-        throw new Error("Only the customer who created this project can modify its payment or assignment status.");
-      }
-    }
+  async fundViaApi(_assignmentId: string, _paymentMethod?: string, _transactionReference?: string): Promise<any> {
+    throw new Error(
+      "Direct assignment funding (/fund) is disabled. Use Lipila Mobile Money checkout (/api/payments/initiate)."
+    );
+  },
 
-    const specialistRoles = ["writer", "proofreader"];
+  async claimViaApi(assignmentId: string): Promise<any> {
+    return apiClient.post(`/api/assignments/${assignmentId}/claim`);
+  },
 
-    // Check writer-owned actions (specialists)
-    const isApprovedSpecialist = 
-      actor.verificationStatus === "approved" && 
-      actor.writerStatus === "active" && 
-      actor.isVerifiedWriter === true;
+  async submitDraftViaApi(
+    assignmentId: string,
+    draftUrl: string,
+    notes?: string,
+    fileMeta?: { fileId?: string; storageKey?: string; fileName?: string }
+  ): Promise<any> {
+    return apiClient.post(`/api/assignments/${assignmentId}/submit-draft`, {
+      draftUrl,
+      notes,
+      ...(fileMeta?.fileId ? { fileId: fileMeta.fileId } : {}),
+      ...(fileMeta?.storageKey ? { storageKey: fileMeta.storageKey } : {}),
+      ...(fileMeta?.fileName ? { fileName: fileMeta.fileName } : {}),
+    });
+  },
 
-    if (next === "assigned") {
-      if (!specialistRoles.includes(actor.role)) {
-        throw new Error("Only active specialists can claim unassigned projects.");
-      }
-      if (!isApprovedSpecialist) {
-        throw new Error("You must be a verified specialist with an active account status to claim projects.");
-      }
-    }
-    if (next === "draft_submitted" || (prev === "review_rejected" && next === "in_progress")) {
-      if (!specialistRoles.includes(actor.role) || actor.uid !== proj.writerId) {
-        throw new Error("Only the assigned specialist can submit work or start drafting changes.");
-      }
-    }
+  async approveViaApi(assignmentId: string): Promise<any> {
+    return apiClient.post(`/api/assignments/${assignmentId}/approve`);
+  },
 
-    // Check proofreader-owned actions (reviewers)
-    if (next === "under_review" || next === "review_rejected" || next === "completed") {
-      // Separation of duties: The assigned writer can NEVER review or approve their own work!
-      if (proj.writerId && actor.uid === proj.writerId) {
-        throw new Error("Separation of duties violation: The assigned writer cannot review, reject, or approve their own submission.");
-      }
-      if (!specialistRoles.includes(actor.role)) {
-        throw new Error("Only designated specialists can review, approve, or return drafts.");
-      }
-      if (next === "under_review" && !isApprovedSpecialist) {
-        throw new Error("You must be a verified specialist to claim audits.");
-      }
-    }
+  async requestRevision(assignmentId: string, explanation: string): Promise<any> {
+    return apiClient.post(`/api/assignments/${assignmentId}/revision`, { explanation });
+  },
+
+  async raiseDispute(assignmentId: string, reason: string, details?: string, evidenceFiles?: any[]): Promise<any> {
+    return apiClient.post(`/api/assignments/${assignmentId}/dispute`, {
+      reason,
+      details,
+      ...(evidenceFiles && evidenceFiles.length > 0 ? { evidenceFiles } : {}),
+    });
   }
 };

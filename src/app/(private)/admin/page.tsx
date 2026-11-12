@@ -11,6 +11,7 @@ import { Tabs } from "@/components/ui/Tabs";
 import { Loader } from "@/components/ui/Loader";
 import { Input, Textarea } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
+import { AuthorizedFileLink } from "@/components/ui/AuthorizedFileLink";
 import {
   TableContainer,
   Table,
@@ -86,6 +87,10 @@ export default function AdminPanel() {
   const [metrics, setMetrics] = useState<PlatformMetrics | null>(null);
   const [loadingMetrics, setLoadingMetrics] = useState(true);
 
+  // Lipila Mobile Money Collections (Phase 5)
+  const [paymentsData, setPaymentsData] = useState<any>(null);
+  const [loadingPayments, setLoadingPayments] = useState(false);
+
   // ---------------------------------------------------------------------------
   // DATA LOADERS
   // ---------------------------------------------------------------------------
@@ -139,6 +144,15 @@ export default function AdminPanel() {
     } catch { /* silent */ } finally { setLoadingAudit(false); }
   };
 
+  const loadPayments = async () => {
+    setLoadingPayments(true);
+    try {
+      const { paymentService } = await import("@/services/paymentService");
+      const data = await paymentService.getAdminCollections();
+      setPaymentsData(data);
+    } catch { /* silent */ } finally { setLoadingPayments(false); }
+  };
+
   const loadMetrics = async () => {
     setLoadingMetrics(true);
     try {
@@ -153,6 +167,7 @@ export default function AdminPanel() {
     loadResearch();
     loadUsers();
     loadDisputes();
+    loadPayments();
     loadAuditLogs();
     loadMetrics();
   }, []);
@@ -281,14 +296,7 @@ export default function AdminPanel() {
     if (!confirm(`Change this user's role to ${newRole}? This will be audit-logged.`)) return;
     setActioningUser(uid);
     try {
-      await userService.updateUserProfile(uid, { role: newRole as any });
-      await adminService.logPlatformAudit(
-        profile!,
-        "ROLE_CHANGED",
-        uid,
-        "user",
-        `Admin changed user [${uid}] role to ${newRole.toUpperCase()}`
-      );
+      await userService.changeUserRole(uid, newRole as "customer" | "writer" | "admin");
       await Promise.all([loadUsers(), loadAuditLogs()]);
     } catch (err: any) {
       alert(`Failed: ${err?.message}`);
@@ -323,9 +331,13 @@ export default function AdminPanel() {
   };
 
   const handleRefundDispute = async (disputeId: string) => {
+    const externalRefundReference = window.prompt(
+      "Enter the external Mobile Money refund transaction reference confirming manual settlement:"
+    );
+    if (!externalRefundReference || !externalRefundReference.trim()) return;
     if (!confirm("Issue a full escrow refund for this dispute? This action is irreversible.")) return;
     try {
-      await adminService.refundDispute(disputeId, profile!);
+      await adminService.refundDispute(disputeId, profile!, externalRefundReference.trim());
       await Promise.all([loadDisputes(), loadAuditLogs()]);
     } catch (err: any) {
       alert(`Refund failed: ${err?.message}`);
@@ -359,6 +371,7 @@ export default function AdminPanel() {
     { id: "assignments", label: `Assignments (${allAssignments.length})` },
     { id: "verifications", label: `Verifications (${pendingExperts.length})` },
     { id: "disputes", label: `Disputes (${openDisputes.length})` },
+    { id: "collections", label: `Collections (${paymentsData?.collections?.length || 0})` },
     { id: "users", label: `Users (${users.length})` },
     { id: "metrics", label: "Metrics" },
     { id: "audit", label: "Audit Logs" },
@@ -880,44 +893,44 @@ export default function AdminPanel() {
                       <strong className="text-foreground block text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">Submitted Credentials Documents:</strong>
                       <div className="flex gap-2 flex-wrap">
                         {exp.academic?.documents?.degreeCertificateUrl ? (
-                          <a href={exp.academic.documents.degreeCertificateUrl} target="_blank" rel="noreferrer"
-                            className="inline-flex items-center gap-1.5 text-xs font-bold bg-primary/10 text-primary py-2 px-3.5 rounded-lg border border-primary/25 hover:bg-primary/20 transition-all select-none">
+                          <AuthorizedFileLink fileRef={{ url: exp.academic.documents.degreeCertificateUrl }}
+                            className="inline-flex items-center gap-1.5 text-xs font-bold bg-primary/10 text-primary py-2 px-3.5 rounded-lg border border-primary/25 hover:bg-primary/20 transition-all select-none cursor-pointer">
                             🎓 Degree Certificate
-                          </a>
+                          </AuthorizedFileLink>
                         ) : (
                           <span className="text-xs text-danger font-semibold bg-danger/10 py-2 px-3.5 rounded-lg border border-danger/20">Degree Scan Missing</span>
                         )}
                         {exp.academic?.documents?.transcriptUrl ? (
-                          <a href={exp.academic.documents.transcriptUrl} target="_blank" rel="noreferrer"
-                            className="inline-flex items-center gap-1.5 text-xs font-bold bg-primary/10 text-primary py-2 px-3.5 rounded-lg border border-primary/25 hover:bg-primary/20 transition-all select-none">
+                          <AuthorizedFileLink fileRef={{ url: exp.academic.documents.transcriptUrl }}
+                            className="inline-flex items-center gap-1.5 text-xs font-bold bg-primary/10 text-primary py-2 px-3.5 rounded-lg border border-primary/25 hover:bg-primary/20 transition-all select-none cursor-pointer">
                             📊 Academic Transcript
-                          </a>
+                          </AuthorizedFileLink>
                         ) : (
                           <span className="text-xs text-danger font-semibold bg-danger/10 py-2 px-3.5 rounded-lg border border-danger/20">Transcript Scan Missing</span>
                         )}
                         {exp.academic?.documents?.cvUrl && (
-                          <a href={exp.academic.documents.cvUrl} target="_blank" rel="noreferrer"
-                            className="inline-flex items-center gap-1.5 text-xs font-bold bg-secondary text-foreground py-2 px-3.5 rounded-lg border border-border hover:bg-secondary/80 transition-all select-none">
+                          <AuthorizedFileLink fileRef={{ url: exp.academic.documents.cvUrl }}
+                            className="inline-flex items-center gap-1.5 text-xs font-bold bg-secondary text-foreground py-2 px-3.5 rounded-lg border border-border hover:bg-secondary/80 transition-all select-none cursor-pointer">
                             📄 CV File
-                          </a>
+                          </AuthorizedFileLink>
                         )}
                         {exp.academic?.documents?.certificationsUrl && (
-                          <a href={exp.academic.documents.certificationsUrl} target="_blank" rel="noreferrer"
-                            className="inline-flex items-center gap-1.5 text-xs font-bold bg-secondary text-foreground py-2 px-3.5 rounded-lg border border-border hover:bg-secondary/80 transition-all select-none">
+                          <AuthorizedFileLink fileRef={{ url: exp.academic.documents.certificationsUrl }}
+                            className="inline-flex items-center gap-1.5 text-xs font-bold bg-secondary text-foreground py-2 px-3.5 rounded-lg border border-border hover:bg-secondary/80 transition-all select-none cursor-pointer">
                             📜 Certifications
-                          </a>
+                          </AuthorizedFileLink>
                         )}
                         {exp.academic?.documents?.publicationsUrl && (
-                          <a href={exp.academic.documents.publicationsUrl} target="_blank" rel="noreferrer"
-                            className="inline-flex items-center gap-1.5 text-xs font-bold bg-secondary text-foreground py-2 px-3.5 rounded-lg border border-border hover:bg-secondary/80 transition-all select-none">
+                          <AuthorizedFileLink fileRef={{ url: exp.academic.documents.publicationsUrl }}
+                            className="inline-flex items-center gap-1.5 text-xs font-bold bg-secondary text-foreground py-2 px-3.5 rounded-lg border border-border hover:bg-secondary/80 transition-all select-none cursor-pointer">
                             📚 Publications
-                          </a>
+                          </AuthorizedFileLink>
                         )}
                         {exp.academic?.documents?.supportingDocsUrl && (
-                          <a href={exp.academic.documents.supportingDocsUrl} target="_blank" rel="noreferrer"
-                            className="inline-flex items-center gap-1.5 text-xs font-bold bg-secondary text-foreground py-2 px-3.5 rounded-lg border border-border hover:bg-secondary/80 transition-all select-none">
+                          <AuthorizedFileLink fileRef={{ url: exp.academic.documents.supportingDocsUrl }}
+                            className="inline-flex items-center gap-1.5 text-xs font-bold bg-secondary text-foreground py-2 px-3.5 rounded-lg border border-border hover:bg-secondary/80 transition-all select-none cursor-pointer">
                             📂 Supporting Files
-                          </a>
+                          </AuthorizedFileLink>
                         )}
                       </div>
                     </div>
@@ -1078,6 +1091,137 @@ export default function AdminPanel() {
                 </details>
               )}
             </div>
+          )}
+        </div>
+      )}
+
+      {/* =====================================================================
+          LIPILA MOBILE MONEY COLLECTIONS TAB (Phase 5)
+          ===================================================================== */}
+      {activeTab === "collections" && (
+        <div className="flex flex-col gap-6">
+          <div className="flex justify-between items-center flex-wrap gap-3">
+            <div>
+              <h2 className="text-xl font-bold tracking-tight text-foreground">Lipila Mobile Money Collections</h2>
+              <p className="text-sm text-muted-foreground mt-0.5">
+                Real-time audit of customer escrow collections via Airtel Money, MTN MoMo, and Zamtel Kwacha.
+              </p>
+            </div>
+            <Button variant="outline" size="sm" onClick={loadPayments} disabled={loadingPayments} className="text-xs">
+              🔄 Refresh Collections
+            </Button>
+          </div>
+
+          {/* Metric Cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <Card className="p-4 border-emerald-500/20 bg-emerald-50/20 dark:bg-emerald-950/20">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">Total Escrow Collected</span>
+              <span className="text-2xl font-black text-emerald-600 dark:text-emerald-400 block mt-1">
+                K{Number(paymentsData?.summary?.totalCollectedZMW || 0).toFixed(2)}
+              </span>
+              <span className="text-[11px] text-muted-foreground mt-0.5 block">ZMW in verified payments</span>
+            </Card>
+
+            <Card className="p-4 border-border/40">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">Airtel Money</span>
+              <span className="text-2xl font-black text-red-600 block mt-1">
+                {paymentsData?.summary?.networkCounts?.airtel_money || 0}
+              </span>
+              <span className="text-[11px] text-muted-foreground mt-0.5 block">Transactions processed</span>
+            </Card>
+
+            <Card className="p-4 border-border/40">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">MTN Mobile Money</span>
+              <span className="text-2xl font-black text-amber-500 block mt-1">
+                {paymentsData?.summary?.networkCounts?.mtn_money || 0}
+              </span>
+              <span className="text-[11px] text-muted-foreground mt-0.5 block">Transactions processed</span>
+            </Card>
+
+            <Card className="p-4 border-border/40">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">Zamtel Kwacha</span>
+              <span className="text-2xl font-black text-emerald-600 block mt-1">
+                {paymentsData?.summary?.networkCounts?.zamtel_kwacha || 0}
+              </span>
+              <span className="text-[11px] text-muted-foreground mt-0.5 block">Transactions processed</span>
+            </Card>
+          </div>
+
+          {/* Collections Table */}
+          {loadingPayments ? (
+            <div className="py-12 flex justify-center"><Loader size="md" /></div>
+          ) : !paymentsData?.collections || paymentsData.collections.length === 0 ? (
+            <Card className="border-border/40 p-8 text-center">
+              <span className="text-3xl">📱</span>
+              <h3 className="text-sm font-bold text-foreground mt-2">No Mobile Money Collections Yet</h3>
+              <p className="text-xs text-muted-foreground mt-1">Customer mobile money transactions will appear here in real-time.</p>
+            </Card>
+          ) : (
+            <TableContainer>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Reference ID</TableHead>
+                    <TableHead>Customer</TableHead>
+                    <TableHead>Network</TableHead>
+                    <TableHead>Handset</TableHead>
+                    <TableHead>Amount (ZMW)</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Lipila Tx ID</TableHead>
+                    <TableHead>Date</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {paymentsData.collections.map((c: any) => (
+                    <TableRow key={c.id}>
+                      <TableCell className="font-mono text-xs font-bold text-foreground">
+                        {c.referenceId}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {c.customerEmail || c.customerId?.substring(0, 8)}
+                      </TableCell>
+                      <TableCell>
+                        {c.network === "airtel_money" && (
+                          <Badge variant="danger" className="text-[10px] uppercase font-bold">Airtel Money</Badge>
+                        )}
+                        {c.network === "mtn_money" && (
+                          <Badge variant="warning" className="text-[10px] uppercase font-bold">MTN MoMo</Badge>
+                        )}
+                        {c.network === "zamtel_kwacha" && (
+                          <Badge variant="success" className="text-[10px] uppercase font-bold">Zamtel Kwacha</Badge>
+                        )}
+                        {!["airtel_money", "mtn_money", "zamtel_kwacha"].includes(c.network) && (
+                          <Badge variant="secondary" className="text-[10px]">{c.network}</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="font-mono text-xs text-foreground">
+                        {c.maskedPhone}
+                      </TableCell>
+                      <TableCell className="font-bold text-xs text-emerald-600 dark:text-emerald-400">
+                        K{Number(c.amount).toFixed(2)}
+                      </TableCell>
+                      <TableCell>
+                        {c.status === "Successful" && (
+                          <Badge variant="success">Successful</Badge>
+                        )}
+                        {c.status === "Pending" && (
+                          <Badge variant="warning">Pending Prompt</Badge>
+                        )}
+                        {c.status === "Failed" && (
+                          <Badge variant="danger">Failed</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="font-mono text-[11px] text-muted-foreground">
+                        {c.transactionId || "—"}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                        {c.createdAt ? new Date(c.createdAt).toLocaleDateString() : "—"}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
           )}
         </div>
       )}

@@ -97,6 +97,13 @@ export interface UserProfile {
     smsNotifications?: boolean;
   };
 
+  // Authoritative Ledger Financial Balances (Phase 4)
+  availableBalance?: number;
+  pendingBalance?: number;
+  totalEarned?: number;
+  totalPaidOut?: number;
+  canProofread?: boolean;
+
   createdAt: string;
   updatedAt: string;
   metadata?: {
@@ -130,6 +137,11 @@ export interface ProjectFile {
   uploadedBy: string;
   uploadedAt: string;
   sizeBytes: number;
+  fileId?: string;
+  storageKey?: string;
+  storagePath?: string;
+  storageProvider?: "r2" | "firebase_legacy";
+  contentType?: string;
 }
 
 export interface StatusHistoryEntry {
@@ -200,6 +212,8 @@ export interface Project {
   fundedAt?: string;
   releasedAt?: string;
   refundedAt?: string;
+  paymentReference?: string;
+  paymentNetwork?: string;
   simulatedPaymentHistory?: any[];
 }
 

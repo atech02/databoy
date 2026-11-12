@@ -1,8 +1,8 @@
 import { doc, getDoc, setDoc, updateDoc, collection, query, where, getDocs } from "firebase/firestore";
-import { httpsCallable } from "firebase/functions";
-import { db, functions } from "@/config/firebase";
+import { db } from "@/config/firebase";
 import { UserProfile, UserStatus, UserAvailability, VerificationStatus } from "@/types/domain";
 import { validateUserProfile } from "@/utils/validation";
+import { apiClient } from "./apiClient";
 
 const USERS_COLLECTION = "users";
 
@@ -70,26 +70,32 @@ export const userService = {
   },
 
   /**
-   * Creates a new user profile with validations
+   * Creates a new user profile with validations (omitting protected server-controlled metrics/balances from Firestore write)
    */
   async createUserProfile(profile: Omit<UserProfile, "completedCount" | "reputation" | "createdAt" | "updatedAt">): Promise<UserProfile> {
     const timestamp = new Date().toISOString();
-    const newProfile: UserProfile = {
+    const clientPayload = {
       ...profile,
-      reputation: 0, // Reputation framework default (Revision 6 / Issue 4)
-      completedCount: 0,
-      completedAssignments: 0,
-      averageRating: 0,
-      activeTaskCount: 0,
-      disputeCount: 0,
-      revisionCount: 0,
+      role: "customer" as const,
+      status: "active" as const,
       yearsOfExperience: 0,
       preferredWorkload: 5,
       competencies: [],
       subjectExpertise: [],
       degreeLevel: "",
       createdAt: timestamp,
-      updatedAt: timestamp
+      updatedAt: timestamp,
+    };
+
+    const newProfile: UserProfile = {
+      ...clientPayload,
+      reputation: 0,
+      completedCount: 0,
+      completedAssignments: 0,
+      averageRating: 0,
+      activeTaskCount: 0,
+      disputeCount: 0,
+      revisionCount: 0,
     };
 
     // Run inputs validation
@@ -101,7 +107,7 @@ export const userService = {
     console.log(`[QUERY_START] collection: ${USERS_COLLECTION} | operation: create | path: ${USERS_COLLECTION}/${newProfile.uid} | filters: none | orderBy: none | limit: none`);
     try {
       const docRef = doc(db, USERS_COLLECTION, newProfile.uid);
-      await setDoc(docRef, newProfile);
+      await setDoc(docRef, clientPayload);
       console.log(`[QUERY_SUCCESS] collection: ${USERS_COLLECTION} | operation: create | path: ${USERS_COLLECTION}/${newProfile.uid}`);
       return newProfile;
     } catch (error: any) {
@@ -132,29 +138,40 @@ export const userService = {
   },
 
   /**
-   * Toggles active/suspended state of a user (Admin restricted capability)
+   * Toggles active/suspended state of a user (Admin restricted Express API only)
    */
   async toggleUserStatus(uid: string, status: UserStatus): Promise<void> {
     if (status === "suspended") {
-      try {
-        const fn = httpsCallable(functions, "adminsuspenduser");
-        await fn({ targetUid: uid, reason: "Administrative suspension" });
-        return;
-      } catch (fnErr) {
-        console.warn("Cloud function 'adminsuspenduser' failed, attempting direct update fallback:", fnErr);
-      }
+      await apiClient.post(`/api/admin/users/${uid}/suspend`, { reason: "Administrative suspension" });
+    } else {
+      await apiClient.post(`/api/admin/users/${uid}/activate`);
     }
+  },
 
-    try {
-      const docRef = doc(db, USERS_COLLECTION, uid);
-      await updateDoc(docRef, {
-        status,
-        updatedAt: new Date().toISOString()
-      });
-    } catch (error) {
-      console.error("Error toggling user status:", error);
-      throw error;
-    }
+  /**
+   * Changes a user's role via Express Backend API only.
+   */
+  async changeUserRole(uid: string, role: "customer" | "writer" | "admin"): Promise<void> {
+    await apiClient.post(`/api/admin/users/${uid}/role`, { role });
+  },
+
+  /**
+   * Submits writer application to the backend API
+   */
+  async applyForWriter(applicationData: {
+    university: string;
+    major: string;
+    yearOfStudy: string;
+    degreeLevel?: string;
+    subjects: string[];
+    phone: string;
+    bio?: string;
+    degreeCertificateUrl?: string;
+    transcriptUrl?: string;
+    cvUrl?: string;
+    canProofread?: boolean;
+  }): Promise<{ success: boolean; message: string; verificationStatus: string }> {
+    return apiClient.post("/api/writers/apply", applicationData);
   },
 
   /**
@@ -182,182 +199,38 @@ export const userService = {
   },
 
   /**
-   * Approves academic credentials, enabling expert dashboard access (Revision 1 & 7)
+   * Approves academic credentials via Express Backend API only (no Cloud Function or direct fallback).
    */
-  async approveVerification(uid: string, adminProfile: UserProfile): Promise<void> {
-    try {
-      const fn = httpsCallable(functions, "adminapprovewriter");
-      await fn({ targetUid: uid });
-      return;
-    } catch (fnErr) {
-      console.warn("Cloud function 'adminapprovewriter' failed, attempting direct update fallback:", fnErr);
-    }
-
-    try {
-      const docRef = doc(db, USERS_COLLECTION, uid);
-      const docSnap = await getDoc(docRef);
-      if (!docSnap.exists()) throw new Error("User profile not found.");
-      
-      const user = docSnap.data() as UserProfile;
-      const timestamp = new Date().toISOString();
-      
-      const newHistoryEntry = {
-        status: "approved",
-        actorId: adminProfile.uid,
-        actorName: adminProfile.displayName,
-        actorRole: adminProfile.role,
-        timestamp,
-        note: "Credentials approved manually by administrator."
-      };
-      
-      const statusHistory = [...(user.statusHistory || []), newHistoryEntry];
-      
-      await updateDoc(docRef, {
-        verificationStatus: "approved",
-        writerStatus: "active",
-        isVerifiedWriter: true,
-        verifiedAt: timestamp,
-        status: "active",
-        availability: "available",
-        profileCompletion: 100,
-        
-        // Reputation initialization (Revision 5)
-        reputation: 0,
-        completedCount: 0,
-        disputeCount: 0,
-        revisionCount: 0,
-        activeTaskCount: 0,
-        
-        // Matching readiness default values (Revision 11)
-        competencies: user.academic?.specializations || [],
-        subjectExpertise: user.academic?.specializations || [],
-        degreeLevel: user.academic?.yearOfStudy || "Degree",
-        yearsOfExperience: 0,
-        preferredWorkload: 5,
-        averageRating: 0,
-        completedAssignments: 0,
-        
-        statusHistory,
-        updatedAt: timestamp
-      });
-    } catch (error) {
-      console.error("Error approving expert verification:", error);
-      throw error;
-    }
+  async approveVerification(uid: string, _adminProfile: UserProfile): Promise<void> {
+    await apiClient.post(`/api/admin/writers/${uid}/approve`, { grantProofreading: true });
   },
 
   /**
-   * Rejects academic credentials and disables dashboard capabilities (Revision 1, 7 & 8)
+   * Rejects academic credentials via Express Backend API only.
    */
-  async rejectVerification(uid: string, reason: string, adminProfile: UserProfile): Promise<void> {
-    try {
-      const docRef = doc(db, USERS_COLLECTION, uid);
-      const docSnap = await getDoc(docRef);
-      if (!docSnap.exists()) throw new Error("User profile not found.");
-      
-      const user = docSnap.data() as UserProfile;
-      const timestamp = new Date().toISOString();
-      
-      const newHistoryEntry = {
-        status: "rejected",
-        actorId: adminProfile.uid,
-        actorName: adminProfile.displayName,
-        actorRole: adminProfile.role,
-        timestamp,
-        note: `Credentials rejected. Reason: ${reason}`
-      };
-      
-      const statusHistory = [...(user.statusHistory || []), newHistoryEntry];
-      const previousRejectionsCount = (user.previousRejectionsCount || 0) + 1;
-      
-      await updateDoc(docRef, {
-        verificationStatus: "rejected",
-        writerStatus: "inactive",
-        isVerifiedWriter: false,
-        rejectedAt: timestamp,
-        rejectionReason: reason,
-        statusHistory,
-        previousRejectionsCount,
-        updatedAt: timestamp
-      });
-    } catch (error) {
-      console.error("Error rejecting expert verification:", error);
-      throw error;
-    }
+  async rejectVerification(uid: string, reason: string, _adminProfile: UserProfile): Promise<void> {
+    await apiClient.post(`/api/admin/writers/${uid}/reject`, { reason });
   },
 
   /**
-   * Requests clarification on academic documents (Revision 9)
+   * Requests clarification on academic documents via Admin Backend API
    */
-  async requestClarification(uid: string, message: string, adminProfile: UserProfile): Promise<void> {
-    try {
-      const docRef = doc(db, USERS_COLLECTION, uid);
-      const docSnap = await getDoc(docRef);
-      if (!docSnap.exists()) throw new Error("User profile not found.");
-      
-      const user = docSnap.data() as UserProfile;
-      const timestamp = new Date().toISOString();
-      
-      const newHistoryEntry = {
-        status: "clarification_required",
-        actorId: adminProfile.uid,
-        actorName: adminProfile.displayName,
-        actorRole: adminProfile.role,
-        timestamp,
-        note: `Clarification requested: ${message}`
-      };
-      
-      const statusHistory = [...(user.statusHistory || []), newHistoryEntry];
-      const previousClarificationsCount = (user.previousClarificationsCount || 0) + 1;
-      
-      await updateDoc(docRef, {
-        verificationStatus: "clarification_required",
-        writerStatus: "inactive",
-        isVerifiedWriter: false,
-        rejectionReason: message, // Reuse field or display as feedback message
-        statusHistory,
-        previousClarificationsCount,
-        updatedAt: timestamp
-      });
-    } catch (error) {
-      console.error("Error requesting clarification:", error);
-      throw error;
-    }
+  async requestClarification(uid: string, message: string, _adminProfile: UserProfile): Promise<void> {
+    await apiClient.post(`/api/admin/writers/${uid}/clarification`, { note: message });
   },
 
   /**
-   * Fully suspends user account permissions
+   * Fully suspends user account permissions via Admin Backend API
    */
   async suspendUser(uid: string): Promise<void> {
-    try {
-      const docRef = doc(db, USERS_COLLECTION, uid);
-      await updateDoc(docRef, {
-        status: "suspended",
-        writerStatus: "inactive",
-        isVerifiedWriter: false,
-        availability: "suspended",
-        updatedAt: new Date().toISOString()
-      });
-    } catch (error) {
-      console.error("Error fully suspending user profile:", error);
-      throw error;
-    }
+    await apiClient.post(`/api/admin/users/${uid}/suspend`, { reason: "Administrative suspension" });
   },
 
   /**
-   * Updates expert work availability status
+   * Updates expert work availability status via Writer Backend API
    */
-  async updateExpertAvailability(uid: string, availability: UserAvailability): Promise<void> {
-    try {
-      const docRef = doc(db, USERS_COLLECTION, uid);
-      await updateDoc(docRef, {
-        availability,
-        updatedAt: new Date().toISOString()
-      });
-    } catch (error) {
-      console.error("Error updating expert availability:", error);
-      throw error;
-    }
+  async updateExpertAvailability(_uid: string, availability: UserAvailability): Promise<void> {
+    await apiClient.post("/api/writers/me/availability", { availability });
   },
 
   /**
@@ -378,5 +251,24 @@ export const userService = {
       console.error(`[QUERY_FAILURE] collection: ${USERS_COLLECTION} | operation: list | code: ${error?.code || 'unknown'} | message: ${error?.message}`);
       throw error;
     }
+  },
+
+  /**
+   * Fetches authoritatively calculated wallet earnings and ledger transactions for current writer
+   */
+  async getWriterEarnings(): Promise<{ wallet: any; transactions: any[] }> {
+    const res = await apiClient.get<{ wallet: any; transactions: any[] }>("/api/writers/me/earnings");
+    return res;
+  },
+
+  /**
+   * Submits a formal payout request against available balance
+   */
+  async requestPayout(amount: number, paymentMethod: string, paymentDetails: Record<string, any>): Promise<any> {
+    const res = await apiClient.post<{ message: string; payoutId: string; remainingBalance: number }>(
+      "/api/writers/me/payout-request",
+      { amount, paymentMethod, paymentDetails }
+    );
+    return res;
   }
 };

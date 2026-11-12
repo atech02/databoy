@@ -1,6 +1,6 @@
 import { DocumentProcessor } from "./documentProcessor";
 import { parseOCRText, ParsedAssignmentFields } from "@/utils/ocrParser";
-import { collection, query, where, getDocs, addDoc, onSnapshot, doc } from "firebase/firestore";
+import { collection, query, where, getDocs, addDoc, onSnapshot, doc, Timestamp } from "firebase/firestore";
 import { db } from "@/config/firebase";
 
 export interface OCRResult {
@@ -120,9 +120,9 @@ export const ocrService = {
         jobId = querySnap.docs[0].id;
         console.log(`Active OCR job found for file: ${file.name}. Subscribing to job ID: ${jobId}`);
       } else {
-        // Create new OCR job document with 30-day retention metadata
+        // Create new OCR job document with 30-day retention metadata (Firestore Timestamp for TTL)
         const createdAt = new Date().toISOString();
-        const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+        const expiresAt = Timestamp.fromDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000));
         
         const docRef = await addDoc(ocrJobsRef, {
           customerId,

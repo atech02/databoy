@@ -11,6 +11,7 @@ import { Loader } from "@/components/ui/Loader";
 import { Input, Select, Textarea } from "@/components/ui/Input";
 import { userService } from "@/services/userService";
 import { storageService } from "@/services/storageService";
+import { AuthorizedFileLink } from "@/components/ui/AuthorizedFileLink";
 import { notificationService } from "@/services/notificationService";
 import { adminService } from "@/services/adminService";
 import { BackButton } from "@/components/ui/BackButton";
@@ -623,9 +624,9 @@ export default function VerificationCentre() {
                       <span className="text-[10px] text-primary animate-pulse mt-1">Uploading scan... {uploadProgress["degree_certificate"]}%</span>
                     )}
                     {degreeUrl && (
-                      <a href={degreeUrl} target="_blank" rel="noreferrer" className="text-xs text-primary font-semibold hover:underline mt-2 flex items-center gap-1.5">
+                      <AuthorizedFileLink fileRef={{ url: degreeUrl }} className="text-xs text-primary font-semibold hover:underline mt-2 flex items-center gap-1.5 text-left cursor-pointer">
                         📄 View Degree Scan
-                      </a>
+                      </AuthorizedFileLink>
                     )}
                   </div>
 
@@ -651,9 +652,9 @@ export default function VerificationCentre() {
                       <span className="text-[10px] text-primary animate-pulse mt-1">Uploading scan... {uploadProgress["transcript"]}%</span>
                     )}
                     {transcriptUrl && (
-                      <a href={transcriptUrl} target="_blank" rel="noreferrer" className="text-xs text-primary font-semibold hover:underline mt-2 flex items-center gap-1.5">
+                      <AuthorizedFileLink fileRef={{ url: transcriptUrl }} className="text-xs text-primary font-semibold hover:underline mt-2 flex items-center gap-1.5 text-left cursor-pointer">
                         📊 View Transcript Scan
-                      </a>
+                      </AuthorizedFileLink>
                     )}
                   </div>
 
@@ -679,9 +680,9 @@ export default function VerificationCentre() {
                       <span className="text-[10px] text-primary animate-pulse mt-1">Uploading scan... {uploadProgress["cv"]}%</span>
                     )}
                     {cvUrl && (
-                      <a href={cvUrl} target="_blank" rel="noreferrer" className="text-xs text-primary font-semibold hover:underline mt-2 flex items-center gap-1.5">
+                      <AuthorizedFileLink fileRef={{ url: cvUrl }} className="text-xs text-primary font-semibold hover:underline mt-2 flex items-center gap-1.5 text-left cursor-pointer">
                         📄 View Uploaded CV
-                      </a>
+                      </AuthorizedFileLink>
                     )}
                   </div>
 
@@ -707,9 +708,9 @@ export default function VerificationCentre() {
                       <span className="text-[10px] text-primary animate-pulse mt-1">Uploading scan... {uploadProgress["certifications"]}%</span>
                     )}
                     {certificationsUrl && (
-                      <a href={certificationsUrl} target="_blank" rel="noreferrer" className="text-xs text-primary font-semibold hover:underline mt-2 flex items-center gap-1.5">
+                      <AuthorizedFileLink fileRef={{ url: certificationsUrl }} className="text-xs text-primary font-semibold hover:underline mt-2 flex items-center gap-1.5 text-left cursor-pointer">
                         📄 View Certifications
-                      </a>
+                      </AuthorizedFileLink>
                     )}
                   </div>
 
@@ -735,9 +736,9 @@ export default function VerificationCentre() {
                       <span className="text-[10px] text-primary animate-pulse mt-1">Uploading scan... {uploadProgress["publications"]}%</span>
                     )}
                     {publicationsUrl && (
-                      <a href={publicationsUrl} target="_blank" rel="noreferrer" className="text-xs text-primary font-semibold hover:underline mt-2 flex items-center gap-1.5">
+                      <AuthorizedFileLink fileRef={{ url: publicationsUrl }} className="text-xs text-primary font-semibold hover:underline mt-2 flex items-center gap-1.5 text-left cursor-pointer">
                         📄 View Publications Document
-                      </a>
+                      </AuthorizedFileLink>
                     )}
                   </div>
 
@@ -763,9 +764,9 @@ export default function VerificationCentre() {
                       <span className="text-[10px] text-primary animate-pulse mt-1">Uploading scan... {uploadProgress["supporting_docs"]}%</span>
                     )}
                     {supportingDocsUrl && (
-                      <a href={supportingDocsUrl} target="_blank" rel="noreferrer" className="text-xs text-primary font-semibold hover:underline mt-2 flex items-center gap-1.5">
+                      <AuthorizedFileLink fileRef={{ url: supportingDocsUrl }} className="text-xs text-primary font-semibold hover:underline mt-2 flex items-center gap-1.5 text-left cursor-pointer">
                         📄 View Supporting Documents
-                      </a>
+                      </AuthorizedFileLink>
                     )}
                   </div>
 

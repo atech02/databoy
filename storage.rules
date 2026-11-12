@@ -3,73 +3,125 @@ service firebase.storage {
   match /b/{bucket}/o {
 
     // -----------------------------------------------------------------------
-    // AUTH HELPER
+    // AUTHENTICATION & ROLE HELPERS
     // -----------------------------------------------------------------------
     function isSignedIn() {
       return request.auth != null;
     }
 
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.role == 'admin' ||
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin'
+      );
+    }
+
+    function isAssignmentParticipant(projectId) {
+      let asg = firestore.get(/databases/(default)/documents/assignments/$(projectId)).data;
+      return isSignedIn() && (
+        asg.customerId == request.auth.uid ||
+        asg.writerId == request.auth.uid ||
+        asg.proofreaderId == request.auth.uid ||
+        isAdmin()
+      );
+    }
+
+    function isResearchParticipant(requestId) {
+      let res = firestore.get(/databases/(default)/documents/researchRequests/$(requestId)).data;
+      return isSignedIn() && (
+        res.studentId == request.auth.uid ||
+        res.assignedWriterId == request.auth.uid ||
+        isAdmin()
+      );
+    }
+
     // -----------------------------------------------------------------------
-    // ASSIGNMENT BRIEFS
+    // USER PENDING / PRE-SUBMIT WORKSPACE (OCR / Draft Staged Files)
+    // Path: pending/{uid}/{filename}
+    // Strictly private to the authenticated owning user or admins.
+    // -----------------------------------------------------------------------
+    match /pending/{uid}/{filename} {
+      allow read: if isSignedIn() && (request.auth.uid == uid || isAdmin());
+
+      allow create, update: if isSignedIn()
+                            && request.auth.uid == uid
+                            && request.resource.size < 20 * 1024 * 1024  // 20 MB max
+                            && (
+                              request.resource.contentType.matches('image/.*') ||
+                              request.resource.contentType == 'application/pdf' ||
+                              request.resource.contentType == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+                              request.resource.contentType == 'application/msword'
+                            );
+
+      allow delete: if isSignedIn() && (request.auth.uid == uid || isAdmin());
+    }
+
+    // -----------------------------------------------------------------------
+    // ASSIGNMENT FILES
     // Path: assignments/{projectId}/{filename}
-    // Authenticated users (customers) can upload their own assignment briefs.
-    // The Cloud Function service account reads these server-side (bypasses rules).
-    // Admins can read all assignment files.
+    // Only customer who owns project, assigned writer/proofreader, or admin can read/write.
     // -----------------------------------------------------------------------
     match /assignments/{projectId}/{filename} {
-      // Any authenticated user can upload files into any project folder.
-      // Project-level ownership is enforced at the Firestore layer.
-      allow write: if isSignedIn()
-                   && request.resource.size < 20 * 1024 * 1024  // 20 MB max
-                   && (
-                     request.resource.contentType.matches('image/.*') ||
-                     request.resource.contentType == 'application/pdf' ||
-                     request.resource.contentType == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
-                     request.resource.contentType == 'application/msword'
-                   );
+      allow read: if isAssignmentParticipant(projectId);
 
-      // Authenticated users can read files (for download URLs in the UI).
-      allow read: if isSignedIn();
+      // Create & Update: Participant only, max 20MB, supported academic file formats
+      allow create, update: if isAssignmentParticipant(projectId)
+                            && request.resource.size < 20 * 1024 * 1024  // 20 MB max
+                            && (
+                              request.resource.contentType.matches('image/.*') ||
+                              request.resource.contentType == 'application/pdf' ||
+                              request.resource.contentType == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+                              request.resource.contentType == 'application/msword'
+                            );
+
+      // Delete: Admin or the customer who created the assignment
+      allow delete: if isAdmin() || (
+        isAssignmentParticipant(projectId) &&
+        firestore.get(/databases/(default)/documents/assignments/$(projectId)).data.customerId == request.auth.uid
+      );
     }
 
     // -----------------------------------------------------------------------
     // RESEARCH DOCUMENTS
-    // Path: research/{projectId}/{filename}
-    // Same rules as assignments.
+    // Path: research/{requestId}/{filename}
+    // Only student who owns request, assigned expert, or admin can read/write.
     // -----------------------------------------------------------------------
-    match /research/{projectId}/{filename} {
-      allow write: if isSignedIn()
-                   && request.resource.size < 20 * 1024 * 1024  // 20 MB max
-                   && (
-                     request.resource.contentType.matches('image/.*') ||
-                     request.resource.contentType == 'application/pdf' ||
-                     request.resource.contentType == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
-                     request.resource.contentType == 'application/msword'
-                   );
+    match /research/{requestId}/{filename} {
+      allow read: if isResearchParticipant(requestId);
 
-      allow read: if isSignedIn();
+      allow create, update: if isResearchParticipant(requestId)
+                            && request.resource.size < 20 * 1024 * 1024  // 20 MB max
+                            && (
+                              request.resource.contentType.matches('image/.*') ||
+                              request.resource.contentType == 'application/pdf' ||
+                              request.resource.contentType == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+                              request.resource.contentType == 'application/msword'
+                            );
+
+      allow delete: if isAdmin() || (
+        isResearchParticipant(requestId) &&
+        firestore.get(/databases/(default)/documents/researchRequests/$(requestId)).data.studentId == request.auth.uid
+      );
     }
 
     // -----------------------------------------------------------------------
     // SPECIALIST VERIFICATION DOCUMENTS
     // Path: verifications/{uid}/{filename}
-    // Only the owning user can upload their own verification docs.
-    // Admins can read all verification documents.
+    // Only the owning specialist can upload their verification documents.
+    // Only the owning specialist or administrators can view them.
     // -----------------------------------------------------------------------
     match /verifications/{uid}/{filename} {
-      allow write: if isSignedIn()
-                   && request.auth.uid == uid
-                   && request.resource.size < 10 * 1024 * 1024  // 10 MB max
-                   && (
-                     request.resource.contentType.matches('image/.*') ||
-                     request.resource.contentType == 'application/pdf'
-                   );
+      allow read: if isSignedIn() && (request.auth.uid == uid || isAdmin());
 
-      // Owner can read their own docs, admins can read all for audits
-      allow read: if isSignedIn() && (
-        request.auth.uid == uid || 
-        firestore.get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
-      );
+      allow create, update: if isSignedIn()
+                            && request.auth.uid == uid
+                            && request.resource.size < 10 * 1024 * 1024  // 10 MB max
+                            && (
+                              request.resource.contentType.matches('image/.*') ||
+                              request.resource.contentType == 'application/pdf'
+                            );
+
+      allow delete: if isSignedIn() && (request.auth.uid == uid || isAdmin());
     }
 
     // -----------------------------------------------------------------------

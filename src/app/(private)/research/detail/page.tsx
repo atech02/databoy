@@ -12,6 +12,8 @@ import { Modal } from "@/components/ui/Modal";
 import { Badge } from "@/components/ui/Badge";
 import { BackButton } from "@/components/ui/BackButton";
 import { Loader } from "@/components/ui/Loader";
+import { AuthorizedFileLink } from "@/components/ui/AuthorizedFileLink";
+import MobileMoneyCheckoutModal from "@/components/payment/MobileMoneyCheckoutModal";
 import { PROJECT_TYPES } from "@/utils/lookups";
 import { ResearchRequestStatus } from "@/types/domain";
 
@@ -49,13 +51,6 @@ export default function ResearchDetail() {
 
   // Escrow Payment Checkout Modal States
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
-  const [paymentMethod, setPaymentMethod] = useState<"card" | "mtn" | "airtel">("mtn");
-  const [phoneNumber, setPhoneNumber] = useState("");
-  const [cardNumber, setCardNumber] = useState("");
-  const [cardExpiry, setCardExpiry] = useState("");
-  const [cardCvv, setCardCvv] = useState("");
-  const [isProcessingPayment, setIsProcessingPayment] = useState(false);
-  const [paymentError, setPaymentError] = useState<string | null>(null);
 
   // Collaboration Comments Feed States (For active status assigned/in_progress)
   const [collabComment, setCollabComment] = useState("");
@@ -84,9 +79,6 @@ export default function ResearchDetail() {
       const data = await researchService.getResearchRequest(requestId);
       if (data) {
         setRequest(data);
-        if (profile?.academic?.phone) {
-          setPhoneNumber(profile.academic.phone);
-        }
       } else {
         setError("Research request details not found.");
       }
@@ -250,36 +242,6 @@ export default function ResearchDetail() {
     }
   };
 
-  const handleExecutePayment = async () => {
-    if (!requestId || !profile) return;
-    setIsProcessingPayment(true);
-    setPaymentError(null);
-
-    if (paymentMethod === "card" && (!cardNumber || !cardExpiry || !cardCvv)) {
-      setPaymentError("Please fill in credit card details.");
-      setIsProcessingPayment(false);
-      return;
-    }
-    if ((paymentMethod === "mtn" || paymentMethod === "airtel") && !phoneNumber) {
-      setPaymentError("Mobile money phone number is required.");
-      setIsProcessingPayment(false);
-      return;
-    }
-
-    try {
-      // Simulate network handshakes
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      await researchService.completeEscrowPayment(requestId, profile);
-      setShowCheckoutModal(false);
-      await loadDetails();
-    } catch (err: any) {
-      setPaymentError(err.message || "Checkout transaction failed.");
-    } finally {
-      setIsProcessingPayment(false);
-    }
-  };
-
   const handleAssignWriter = async () => {
     if (!requestId || !profile || !selectedWriter) return;
 
@@ -384,15 +346,13 @@ export default function ResearchDetail() {
                     {([...(request.files || []), ...(request.uploadedFiles || [])]
                       .filter((v, i, a) => a.findIndex(t => t.uid === v.uid) === i)
                       .map((file: any) => (
-                        <a
+                        <AuthorizedFileLink
                           key={file.uid}
-                          href={file.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-primary hover:underline font-bold font-mono truncate flex items-center gap-1"
+                          fileRef={file}
+                          className="text-primary hover:underline font-bold font-mono truncate flex items-center gap-1 text-left cursor-pointer"
                         >
                           📄 {file.name}
-                        </a>
+                        </AuthorizedFileLink>
                       ))
                     )}
                   </div>
@@ -711,120 +671,19 @@ export default function ResearchDetail() {
         </div>
       </div>
 
-      {/* SECURE ESCROW CHECKOUT MODAL */}
-      <Modal
+      {/* LIPILA MOBILE MONEY ESCROW CHECKOUT MODAL */}
+      <MobileMoneyCheckoutModal
         isOpen={showCheckoutModal}
         onClose={() => setShowCheckoutModal(false)}
-        title="Secure Escrow Checkout Portal"
-      >
-        <div className="flex flex-col gap-5 text-sm">
-          {paymentError && <Alert variant="error" title="Transaction Failed">{paymentError}</Alert>}
-
-          <div className="bg-secondary/45 p-4 rounded-xl border border-border/30">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Funding escrow for custom research request:</span>
-            <h4 className="text-sm font-bold text-foreground mt-0.5 truncate">{request.title}</h4>
-            <div className="flex justify-between items-center mt-3 pt-3 border-t border-border/20 text-foreground font-extrabold text-base">
-              <span>Required Payment</span>
-              <span className="text-success">K{request.quoteAmount?.toFixed(2)}</span>
-            </div>
-          </div>
-
-          {/* Payment Method Selector */}
-          <div className="flex flex-col gap-2">
-            <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Select Payment Method</span>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-              <button
-                type="button"
-                onClick={() => setPaymentMethod("mtn")}
-                className={`py-2.5 rounded-lg font-bold text-xs border transition-all flex flex-col items-center gap-1 cursor-pointer ${
-                  paymentMethod === "mtn" ? "bg-amber-400/10 border-amber-400 text-amber-500 font-extrabold" : "bg-card border-border/60 hover:bg-secondary/40 text-muted-foreground"
-                }`}
-              >
-                <span>🟡</span>
-                MTN MoMo
-              </button>
-              <button
-                type="button"
-                onClick={() => setPaymentMethod("airtel")}
-                className={`py-2.5 rounded-lg font-bold text-xs border transition-all flex flex-col items-center gap-1 cursor-pointer ${
-                  paymentMethod === "airtel" ? "bg-danger/10 border-danger text-danger font-extrabold" : "bg-card border-border/60 hover:bg-secondary/40 text-muted-foreground"
-                }`}
-              >
-                <span>🔴</span>
-                Airtel Money
-              </button>
-              <button
-                type="button"
-                onClick={() => setPaymentMethod("card")}
-                className={`py-2.5 rounded-lg font-bold text-xs border transition-all flex flex-col items-center gap-1 cursor-pointer ${
-                  paymentMethod === "card" ? "bg-primary/10 border-primary text-primary font-extrabold" : "bg-card border-border/60 hover:bg-secondary/40 text-muted-foreground"
-                }`}
-              >
-                <span>💳</span>
-                Credit Card
-              </button>
-            </div>
-          </div>
-
-          {/* Method Specific Fields */}
-          {paymentMethod === "card" ? (
-            <div className="flex flex-col gap-3 bg-secondary/15 p-4 rounded-xl border border-border/20">
-              <Input
-                label="Cardholder Number"
-                placeholder="4000 1234 5678 9010"
-                value={cardNumber}
-                onChange={(e) => setCardNumber(e.target.value)}
-                required
-              />
-              <div className="grid grid-cols-2 gap-3">
-                <Input
-                  label="Expiration Date"
-                  placeholder="MM/YY"
-                  value={cardExpiry}
-                  onChange={(e) => setCardExpiry(e.target.value)}
-                  required
-                />
-                <Input
-                  label="CVV Code"
-                  type="password"
-                  placeholder="123"
-                  value={cardCvv}
-                  onChange={(e) => setCardCvv(e.target.value)}
-                  required
-                />
-              </div>
-            </div>
-          ) : (
-            <div className="flex flex-col gap-3 bg-secondary/15 p-4 rounded-xl border border-border/20">
-              <Input
-                label={`${paymentMethod === "mtn" ? "MTN Mobile Money" : "Airtel Money"} Phone Number`}
-                placeholder="+260 971234567"
-                value={phoneNumber}
-                onChange={(e) => setPhoneNumber(e.target.value)}
-                required
-              />
-              <span className="text-[10px] text-muted-foreground italic -mt-1 block">
-                A prompt request will be transmitted to this phone to authenticate the escrow budget deposit.
-              </span>
-            </div>
-          )}
-
-          <div className="flex justify-end gap-3 pt-3 border-t border-border/20">
-            <Button variant="outline" size="sm" onClick={() => setShowCheckoutModal(false)} disabled={isProcessingPayment}>
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={handleExecutePayment}
-              isLoading={isProcessingPayment}
-              className="bg-success border-success text-white hover:bg-success/90 hover:border-success/90 font-bold"
-            >
-              Verify & Complete Escrow load
-            </Button>
-          </div>
-        </div>
-      </Modal>
+        assignmentId={request.id}
+        targetType="research"
+        assignmentTitle={request.title}
+        amount={Number(request.quoteAmount || 0)}
+        onSuccess={async () => {
+          setShowCheckoutModal(false);
+          await loadDetails();
+        }}
+      />
 
     </div>
   );

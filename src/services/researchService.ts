@@ -6,11 +6,10 @@ import {
   query, 
   collection, 
   where, 
-  getDocs, 
+  getDocs,
   runTransaction 
 } from "firebase/firestore";
-import { httpsCallable } from "firebase/functions";
-import { db, functions } from "@/config/firebase";
+import { db } from "@/config/firebase";
 import { 
   ResearchRequest, 
   ResearchRequestStatus, 
@@ -20,6 +19,7 @@ import {
 } from "@/types/domain";
 import { auditService } from "./auditService";
 import { userService } from "./userService";
+import { apiClient } from "./apiClient";
 
 const RESEARCH_COLLECTION = "researchRequests";
 
@@ -76,24 +76,33 @@ export const researchService = {
       updatedAt: timestamp
     };
 
-    try {
-      const docRef = doc(db, RESEARCH_COLLECTION, id);
-      await setDoc(docRef, newRequest);
+    // Authoritative backend API creation (no client setDoc fallback)
+    const apiRes = await apiClient.post<{
+      success: boolean;
+      requestId: string;
+      status: string;
+    }>("/api/research", {
+      title: request.title,
+      requestTypes: request.requestTypes,
+      pastedBrief: request.pastedBrief,
+      expectedDeliverable: request.expectedDeliverable,
+      subject: request.subject || "general",
+      levelOfStudy: request.levelOfStudy || "degree",
+      deadline: request.deadline,
+      otherDetails: request.otherDetails,
+      files: request.files || [],
+    });
 
-      // Log activity
-      await auditService.logActivity(id, {
-        type: "system_alert",
-        actorId: request.studentId,
-        actorName: "Student",
-        actorRole: "customer",
-        message: `Research request ${id} created with status: ${initialStatus}`
-      });
-
-      return newRequest;
-    } catch (e) {
-      console.error("Error creating research request:", e);
-      throw e;
+    if (!apiRes?.requestId) {
+      throw new Error("Research request creation failed: server did not return a request ID.");
     }
+
+    const fetched = await this.getResearchRequest(apiRes.requestId);
+    if (fetched) return fetched;
+    return {
+      ...newRequest,
+      id: apiRes.requestId,
+    };
   },
 
   /**
@@ -131,7 +140,7 @@ export const researchService = {
   },
 
   /**
-   * Send a clarification message
+   * Send a clarification message via authenticated backend API
    */
   async sendClarificationMessage(
     requestId: string,
@@ -139,96 +148,18 @@ export const researchService = {
     actorProfile: UserProfile,
     nextStatus?: ResearchRequestStatus
   ): Promise<void> {
-    const docRef = doc(db, RESEARCH_COLLECTION, requestId);
-    const timestamp = new Date().toISOString();
-
-    try {
-      await runTransaction(db, async (transaction) => {
-        const snap = await transaction.get(docRef);
-        if (!snap.exists()) {
-          throw new Error("Research request does not exist.");
-        }
-        const data = snap.data() as ResearchRequest;
-        const thread = data.clarificationThread || [];
-        
-        const newMessage: ClarificationMessage = {
-          ...message,
-          createdAt: timestamp
-        };
-
-        const updatedThread = [...thread, newMessage];
-        const payload: Partial<ResearchRequest> = {
-          clarificationThread: updatedThread,
-          updatedAt: timestamp
-        };
-
-        if (nextStatus) {
-          payload.status = nextStatus;
-          payload.clarificationNeeded = (nextStatus === "needs_clarification");
-        }
-
-        transaction.update(docRef, payload);
-      });
-
-      // Log activity
-      await auditService.logActivity(requestId, {
-        type: "comment",
-        actorId: actorProfile.uid,
-        actorName: actorProfile.displayName,
-        actorRole: actorProfile.role,
-        message: `Posted clarification message: ${message.message.substring(0, 100)}...`
-      });
-
-    } catch (e) {
-      console.error("Error posting clarification message:", e);
-      throw e;
-    }
+    await apiClient.post(`/api/research/${requestId}/clarifications`, {
+      message: message.message,
+      authorName: message.senderName || actorProfile.displayName,
+      requestStudentClarification: nextStatus === "needs_clarification",
+    });
   },
 
   /**
    * Submit Quote by Admin
    */
-  async submitQuote(requestId: string, amount: number, notes: string, adminProfile: UserProfile): Promise<void> {
-    try {
-      const fn = httpsCallable(functions, "submitresearchquote");
-      await fn({ requestId, amount, notes });
-      await auditService.logActivity(requestId, {
-        type: "status_change",
-        actorId: adminProfile.uid,
-        actorName: adminProfile.displayName,
-        actorRole: "admin",
-        message: `Admin issued research quote: K${amount} (Notes: ${notes})`
-      });
-      return;
-    } catch (fnErr) {
-      console.warn("Cloud function 'submitresearchquote' failed, attempting direct update fallback:", fnErr);
-    }
-
-    const docRef = doc(db, RESEARCH_COLLECTION, requestId);
-    const timestamp = new Date().toISOString();
-
-    try {
-      await updateDoc(docRef, {
-        quoteAmount: amount,
-        quoteNotes: notes,
-        quoteStatus: "pending_acceptance",
-        status: "quote_ready",
-        adminReviewedBy: adminProfile.uid,
-        clarificationNeeded: false,
-        updatedAt: timestamp
-      });
-
-      await auditService.logActivity(requestId, {
-        type: "status_change",
-        actorId: adminProfile.uid,
-        actorName: adminProfile.displayName,
-        actorRole: "admin",
-        message: `Admin issued research quote: K${amount} (Notes: ${notes})`
-      });
-    } catch (e) {
-      console.error("Error submitting quote:", e);
-      throw e;
-    }
+  async submitQuote(requestId: string, amount: number, notes: string, _adminProfile: UserProfile): Promise<void> {
+    await apiClient.post(`/api/research/${requestId}/quote`, { quoteAmount: amount, quoteNotes: notes });
   },
 
   /**
@@ -236,159 +167,46 @@ export const researchService = {
    */
   async handleQuoteDecision(requestId: string, accepted: boolean, studentProfile: UserProfile): Promise<void> {
     const quoteStatus = accepted ? "accepted" : "rejected";
-    try {
-      const fn = httpsCallable(functions, "respondresearchquote");
-      await fn({ requestId, accepted });
-      await auditService.logActivity(requestId, {
-        type: "status_change",
-        actorId: studentProfile.uid,
-        actorName: studentProfile.displayName,
-        actorRole: "customer",
-        message: `Student ${quoteStatus} the administration quote.`
-      });
-      return;
-    } catch (fnErr) {
-      console.warn("Cloud function 'respondresearchquote' failed, attempting direct update fallback:", fnErr);
-    }
 
-    const docRef = doc(db, RESEARCH_COLLECTION, requestId);
-    const timestamp = new Date().toISOString();
-    const nextStatus: ResearchRequestStatus = accepted ? "awaiting_payment" : "submitted";
-
-    try {
-      await updateDoc(docRef, {
-        quoteStatus,
-        status: nextStatus,
-        updatedAt: timestamp
-      });
-
-      await auditService.logActivity(requestId, {
-        type: "status_change",
-        actorId: studentProfile.uid,
-        actorName: studentProfile.displayName,
-        actorRole: "customer",
-        message: `Student ${quoteStatus} the administration quote.`
-      });
-    } catch (e) {
-      console.error("Error handling quote decision:", e);
-      throw e;
-    }
+    await apiClient.post(`/api/research/${requestId}/respond-quote`, { accept: accepted });
+    await auditService.logActivity(requestId, {
+      type: "status_change",
+      actorId: studentProfile.uid,
+      actorName: studentProfile.displayName,
+      actorRole: "customer",
+      message: `Student ${quoteStatus} the administration quote.`
+    });
   },
 
   /**
-   * Complete Escrow Payment (Student)
+   * Complete Escrow Payment (Student) — legacy direct funding is disabled.
+   * Research requests must be funded through Lipila Mobile Money (/api/payments/initiate).
    */
-  async completeEscrowPayment(requestId: string, studentProfile: UserProfile): Promise<void> {
-    try {
-      const fn = httpsCallable(functions, "fundresearchrequest");
-      await fn({ requestId });
-      await auditService.logActivity(requestId, {
-        type: "status_change",
-        actorId: studentProfile.uid,
-        actorName: studentProfile.displayName,
-        actorRole: "customer",
-        message: `Escrow payment successfully loaded and funded for research request ${requestId}.`
-      });
-      return;
-    } catch (fnErr) {
-      console.warn("Cloud function 'fundresearchrequest' failed, attempting direct update fallback:", fnErr);
-    }
-
-    const docRef = doc(db, RESEARCH_COLLECTION, requestId);
-    const timestamp = new Date().toISOString();
-
-    try {
-      await updateDoc(docRef, {
-        status: "funded",
-        quoteStatus: "paid",
-        paymentStatus: "paid",
-        updatedAt: timestamp
-      });
-
-      await auditService.logActivity(requestId, {
-        type: "status_change",
-        actorId: studentProfile.uid,
-        actorName: studentProfile.displayName,
-        actorRole: "customer",
-        message: `Escrow payment successfully loaded and funded for research request ${requestId}.`
-      });
-    } catch (e) {
-      console.error("Error completing escrow payment:", e);
-      throw e;
-    }
+  async completeEscrowPayment(_requestId: string, _studentProfile: UserProfile): Promise<void> {
+    throw new Error(
+      "Direct escrow funding is disabled. Please complete payment via Lipila Mobile Money checkout."
+    );
   },
 
   /**
    * Assign Writer (Admin)
    */
-  async assignWriter(requestId: string, writerId: string, adminProfile: UserProfile): Promise<void> {
-    try {
-      const fn = httpsCallable(functions, "assignresearchwriter");
-      await fn({ requestId, writerId });
-      await auditService.logActivity(requestId, {
-        type: "status_change",
-        actorId: adminProfile.uid,
-        actorName: adminProfile.displayName,
-        actorRole: "admin",
-        message: `Admin assigned research request ${requestId} to Expert writer.`
-      });
-      return;
-    } catch (fnErr) {
-      console.warn("Cloud function 'assignresearchwriter' failed, attempting direct update fallback:", fnErr);
-    }
-
-    const docRef = doc(db, RESEARCH_COLLECTION, requestId);
-    const timestamp = new Date().toISOString();
-
-    try {
-      await updateDoc(docRef, {
-        assignedWriterId: writerId,
-        status: "assigned",
-        updatedAt: timestamp
-      });
-
-      await auditService.logActivity(requestId, {
-        type: "status_change",
-        actorId: adminProfile.uid,
-        actorName: adminProfile.displayName,
-        actorRole: "admin",
-        message: `Admin assigned research request ${requestId} to Expert writer.`
-      });
-    } catch (e) {
-      console.error("Error assigning writer:", e);
-      throw e;
-    }
+  async assignWriter(requestId: string, writerId: string, _adminProfile: UserProfile): Promise<void> {
+    await apiClient.post(`/api/research/${requestId}/assign`, { writerId });
   },
 
   /**
-   * Update Status (Universal)
+   * Update Status via authenticated backend API
    */
   async transitionStatus(
     requestId: string,
     nextStatus: ResearchRequestStatus,
-    actorProfile: UserProfile,
+    _actorProfile: UserProfile,
     extraUpdates: Partial<ResearchRequest> = {}
   ): Promise<void> {
-    const docRef = doc(db, RESEARCH_COLLECTION, requestId);
-    const timestamp = new Date().toISOString();
-
-    try {
-      await updateDoc(docRef, {
-        ...extraUpdates,
-        status: nextStatus,
-        updatedAt: timestamp
-      });
-
-      await auditService.logActivity(requestId, {
-        type: "status_change",
-        actorId: actorProfile.uid,
-        actorName: actorProfile.displayName,
-        actorRole: actorProfile.role,
-        message: `Research status shifted to [${nextStatus}]`
-      });
-    } catch (e) {
-      console.error("Error updating status:", e);
-      throw e;
-    }
+    await apiClient.post(`/api/research/${requestId}/status`, {
+      nextStatus,
+      note: (extraUpdates as any)?.statusNote || undefined,
+    });
   }
 };

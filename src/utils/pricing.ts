@@ -166,8 +166,9 @@ export const calculateAcademicPricing = (pages: number): number => {
  * - Proofreader = 16.67%
  * - DataBoy = 33.33%
  */
-export const calculateCommissionBreakdown = (budget: number): CommissionBreakdown => ({
-  writer: parseFloat((budget * 0.50).toFixed(2)),
-  proofreader: parseFloat((budget * 0.1667).toFixed(2)),
-  databoy: parseFloat((budget * 0.3333).toFixed(2)),
-});
+export const calculateCommissionBreakdown = (budget: number): CommissionBreakdown => {
+  const writer = parseFloat((budget * 0.50).toFixed(2));
+  const proofreader = parseFloat((budget * 0.1667).toFixed(2));
+  const databoy = parseFloat((budget - writer - proofreader).toFixed(2));
+  return { writer, proofreader, databoy };
+};

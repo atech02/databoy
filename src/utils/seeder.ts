@@ -174,6 +174,16 @@ export const seeder = {
    * Seeds the database with mock Writers, Proofreaders, and Projects tied to the current customer.
    */
   async seedDatabase(currentCustomerId: string, currentCustomerName: string): Promise<{ success: boolean; count: number }> {
+    const appEnv = (process.env.NEXT_PUBLIC_APP_ENV || "").trim().toLowerCase();
+    const isLocalHost =
+      typeof window !== "undefined" &&
+      ["localhost", "127.0.0.1"].includes(window.location.hostname);
+    if (appEnv === "staging" || appEnv === "production" || !isLocalHost) {
+      throw new Error(
+        "Client-side seeding is disabled outside local development. Use backend/scripts/seed_staging.ts with Firebase Admin SDK for staging data."
+      );
+    }
+
     const timestamp = new Date().toISOString();
     const batch = writeBatch(db);
     let count = 0;
@@ -553,6 +563,14 @@ export const seeder = {
    * Resets and cleans seeded mock projects and users from Firestore
    */
   async clearDatabase(currentCustomerId: string): Promise<{ success: boolean; count: number }> {
+    const appEnv = (process.env.NEXT_PUBLIC_APP_ENV || "").trim().toLowerCase();
+    const isLocalHost =
+      typeof window !== "undefined" &&
+      ["localhost", "127.0.0.1"].includes(window.location.hostname);
+    if (appEnv === "staging" || appEnv === "production" || !isLocalHost) {
+      throw new Error("Client-side database clearing is disabled outside local development.");
+    }
+
     let count = 0;
     try {
       // 1. Clear Mock Writers
