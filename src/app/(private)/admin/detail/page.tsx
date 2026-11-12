@@ -420,7 +420,7 @@ export default function AdminDetailPage() {
               {userProfile.reputation !== undefined && (
                 <div className="mt-2 text-xs border border-border/30 px-3 py-1.5 rounded-full bg-secondary/20 flex items-center gap-1.5 font-bold">
                   <span className="text-amber-500">★</span>
-                  <span>Reputation: {userProfile.reputation} / 5.0</span>
+                  <span>Reputation: {userProfile.reputation > 0 ? `${userProfile.reputation} / 5.0` : "Unrated (New)"}</span>
                   <span className="text-muted-foreground">•</span>
                   <span className="text-muted-foreground font-medium">{userProfile.completedCount || 0} tasks</span>
                 </div>

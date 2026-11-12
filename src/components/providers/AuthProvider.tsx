@@ -83,6 +83,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           profileCompletion: 20
         });
       }
+      if (userProf?.status === "suspended") {
+        console.warn(`[AuthProvider] User ${uid} account is suspended.`);
+        setError("Your account has been suspended. Please contact support.");
+        setProfile(null);
+        return;
+      }
+
       console.log("[PROFILE_FETCH_SUCCESS] User profile loaded successfully from Firestore:", userProf);
       console.log(`[ROLE_RESOLVED] Profile role resolved as: "${userProf?.role}"`);
       setProfile(userProf);
@@ -233,17 +240,50 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   if (error && !profile && !loading) {
-    console.log("[AuthProvider] Rendering Connection Error Screen");
+    console.log("[AuthProvider] Rendering Profile / Connection Error Screen");
+
+    const lower = error.toLowerCase();
+    const isSuspended = lower.includes("suspended") || lower.includes("restricted") || lower.includes("permission-denied");
+    const isValidation = lower.includes("validation failed") || lower.includes("schema") || lower.includes("reputation") || lower.includes("invalid profile");
+
+    let errorTitle = "Database Connection Failed";
+    let errorDesc = "We encountered a network or database connection issue while retrieving your profile. Please check your internet connection and try again.";
+    let iconChar = "📡";
+    let iconClass = "text-amber-500 border-amber-500/25 bg-amber-500/10";
+    let borderClass = "border-amber-500/20";
+    let shadowClass = "shadow-[0_0_30px_rgba(245,158,11,0.1)]";
+    let showRetry = true;
+    let retryLabel = "🔄 Retry Connection";
+
+    if (isSuspended) {
+      errorTitle = "Account Access Restricted";
+      errorDesc = "Your account is currently suspended or access has been restricted. Please contact support if you believe this is an error.";
+      iconChar = "🚫";
+      iconClass = "text-red-500 border-red-500/25 bg-red-500/10";
+      borderClass = "border-red-500/20";
+      shadowClass = "shadow-[0_0_30px_rgba(239,68,68,0.1)]";
+      showRetry = false;
+    } else if (isValidation) {
+      errorTitle = "Account Profile Error";
+      errorDesc = "A schema or profile validation issue was detected while loading your account profile. Please retry or contact support if the problem persists.";
+      iconChar = "⚠️";
+      iconClass = "text-amber-500 border-amber-500/25 bg-amber-500/10";
+      borderClass = "border-amber-500/20";
+      shadowClass = "shadow-[0_0_30px_rgba(245,158,11,0.1)]";
+      showRetry = true;
+      retryLabel = "🔄 Retry Loading Profile";
+    }
+
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#0B0F19] p-6 text-foreground">
-        <div className="max-w-md w-full bg-card/45 backdrop-blur-md border border-amber-500/20 p-8 rounded-2xl shadow-[0_0_30px_rgba(245,158,11,0.1)] flex flex-col items-center text-center gap-6">
-          <div className="w-16 h-16 bg-amber-500/10 rounded-full flex items-center justify-center text-3xl border border-amber-500/25 animate-pulse text-amber-500">
-            ⚠️
+        <div className={`max-w-md w-full bg-card/45 backdrop-blur-md border ${borderClass} p-8 rounded-2xl ${shadowClass} flex flex-col items-center text-center gap-6`}>
+          <div className={`w-16 h-16 rounded-full flex items-center justify-center text-3xl border ${iconClass} animate-pulse`}>
+            {iconChar}
           </div>
           <div className="flex flex-col gap-2 animate-fade-in">
-            <h2 className="text-xl font-bold tracking-tight text-white">Database Connection Failed</h2>
+            <h2 className="text-xl font-bold tracking-tight text-white">{errorTitle}</h2>
             <p className="text-xs text-muted-foreground leading-relaxed">
-              We encountered a network or database connection issue while retrieving your profile. Please check your internet connection and try again.
+              {errorDesc}
             </p>
             {error && (
               <div className="mt-2 bg-red-500/10 text-red-400 text-xs font-mono p-3 rounded-lg border border-red-500/20 max-h-24 overflow-y-auto w-full text-left">
@@ -252,15 +292,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             )}
           </div>
           <div className="flex flex-col sm:flex-row gap-3 w-full mt-2">
-            <button
-              onClick={retryFetchProfile}
-              className="flex-1 py-2.5 px-4 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-700 hover:to-orange-700 text-white font-bold text-sm rounded-xl transition-all duration-300 shadow-[0_4px_12px_rgba(245,158,11,0.2)] cursor-pointer"
-            >
-              🔄 Retry Connection
-            </button>
+            {showRetry && (
+              <button
+                onClick={retryFetchProfile}
+                className="flex-1 py-2.5 px-4 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-700 hover:to-orange-700 text-white font-bold text-sm rounded-xl transition-all duration-300 shadow-[0_4px_12px_rgba(245,158,11,0.2)] cursor-pointer"
+              >
+                {retryLabel}
+              </button>
+            )}
             <button
               onClick={logout}
-              className="py-2.5 px-4 bg-slate-800 hover:bg-slate-700 text-white font-bold text-sm rounded-xl transition-all duration-300 border border-slate-700 cursor-pointer"
+              className={`${showRetry ? "" : "w-full"} py-2.5 px-4 bg-slate-800 hover:bg-slate-700 text-white font-bold text-sm rounded-xl transition-all duration-300 border border-slate-700 cursor-pointer`}
             >
               Logout
             </button>

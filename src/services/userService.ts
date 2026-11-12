@@ -36,12 +36,33 @@ export function normalizeUserProfile(raw: any): UserProfile {
   user.degreeLevel = user.degreeLevel ?? (user.academic?.yearOfStudy || "");
   user.yearsOfExperience = user.yearsOfExperience ?? 0;
   user.preferredWorkload = user.preferredWorkload ?? 5;
-  user.averageRating = user.averageRating ?? (user.reputation || 0);
   user.activeTaskCount = user.activeTaskCount ?? 0;
   user.completedAssignments = user.completedAssignments ?? (user.completedCount || 0);
   user.disputeCount = user.disputeCount ?? 0;
   user.revisionCount = user.revisionCount ?? 0;
-  user.reputation = user.reputation ?? 0;
+
+  // Safe reputation normalization: preserves legitimate scores (1.0-5.0), preserves 0 (unrated),
+  // parses valid numeric strings, defaults missing/null/invalid to 0 (unrated) without mutating stored data
+  const rawRep = raw?.reputation;
+  if (rawRep === undefined || rawRep === null) {
+    user.reputation = 0;
+  } else if (typeof rawRep === "number") {
+    if (Number.isFinite(rawRep) && (rawRep === 0 || (rawRep >= 1.0 && rawRep <= 5.0))) {
+      user.reputation = rawRep;
+    } else {
+      user.reputation = 0;
+    }
+  } else if (typeof rawRep === "string") {
+    const parsed = Number(rawRep);
+    if (Number.isFinite(parsed) && (parsed === 0 || (parsed >= 1.0 && parsed <= 5.0))) {
+      user.reputation = parsed;
+    } else {
+      user.reputation = 0;
+    }
+  } else {
+    user.reputation = 0;
+  }
+  user.averageRating = user.averageRating ?? (user.reputation || 0);
 
   return user;
 }

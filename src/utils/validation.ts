@@ -36,8 +36,12 @@ export const validateUserProfile = (data: Partial<UserProfile>): string[] => {
     errors.push(`Invalid status. Must be one of: ${validStatuses.join(", ")}`);
   }
 
-  if (data.reputation !== undefined && (data.reputation < 1 || data.reputation > 5)) {
-    errors.push("Reputation score must be between 1.0 and 5.0.");
+  if (data.reputation !== undefined && data.reputation !== null) {
+    if (typeof data.reputation !== "number" || Number.isNaN(data.reputation) || !Number.isFinite(data.reputation)) {
+      errors.push("Reputation score must be a valid number.");
+    } else if (data.reputation !== 0 && (data.reputation < 1.0 || data.reputation > 5.0)) {
+      errors.push("Reputation score must be between 1.0 and 5.0 (or 0 for unrated users).");
+    }
   }
 
   // Validate academic onboarding attributes if onboarded

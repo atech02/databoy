@@ -11,11 +11,12 @@ const suites = [
   "test/rate_limit_and_env.test.mjs",
   "test/r2_storage.test.mjs",
   "test/firebase_admin_config.test.mjs",
+  "test/reputation_validation.test.mjs",
 ];
 
 console.log("================================================================================");
-console.log("DATABOY FULL REGRESSION SUITE (PHASES 1 - 5.18)");
-console.log("Running all 10 automated test suites against Firebase Emulator");
+console.log("DATABOY FULL REGRESSION SUITE (PHASES 1 - 5.19)");
+console.log("Running all 11 automated test suites against Firebase Emulator");
 console.log("================================================================================\n");
 
 let allPassed = true;

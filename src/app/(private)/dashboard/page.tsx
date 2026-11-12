@@ -1466,7 +1466,7 @@ function CustomerDashboard({ profile, refreshProfile }: SubDashboardProps) {
             <CardContent className="pt-5 flex justify-between items-center">
               <div>
                 <span className="text-[10px] font-bold uppercase text-muted-foreground">Reputation Rating</span>
-                <div className="text-xl font-black text-foreground mt-1">{profile.reputation?.toFixed(2)} ★</div>
+                <div className="text-xl font-black text-foreground mt-1">{profile.reputation && profile.reputation >= 1 ? `${profile.reputation.toFixed(2)} ★` : "Unrated"}</div>
               </div>
               <div className="text-2xl bg-secondary/80 p-2 rounded-lg">★</div>
             </CardContent>
@@ -1715,7 +1715,7 @@ function ProofreaderDashboard({ profile, refreshProfile }: SubDashboardProps) {
           <CardContent className="pt-6 flex justify-between items-center">
             <div>
               <span className="text-xs font-bold uppercase text-muted-foreground">My Platform Reputation</span>
-              <div className="text-2xl font-black text-foreground mt-1">{profile.reputation.toFixed(2)} ★</div>
+              <div className="text-2xl font-black text-foreground mt-1">{profile.reputation && profile.reputation >= 1 ? `${profile.reputation.toFixed(2)} ★` : "Unrated"}</div>
             </div>
             <div className="text-3xl bg-secondary/80 p-2 rounded-lg">★</div>
           </CardContent>
