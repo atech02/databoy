@@ -10,10 +10,7 @@ This guide documents how to configure environment variables, Lipila mobile-money
 
 ## 1. Local Sandbox Setup
 
-1. Copy the template if needed:
-   ```bash
-   cp backend/.env.example backend/.env
-   ```
+1. Create `backend/.env` locally (never commit it) with the sandbox defaults below:
 2. Keep local sandbox defaults in `backend/.env` (which is ignored by Git):
    ```env
    NODE_ENV=development

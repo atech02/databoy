@@ -24,7 +24,7 @@
    ```
    *(Cloudflare R2 handles private document binary storage; `storage.rules` is retained only for legacy compatibility.)*
 
-4. Provision Cloudflare R2 private bucket (`databoy-staging-documents` or chosen bucket), disable `r2.dev` public URL, apply restricted CORS origins (`https://databoy-aa871.web.app`, `https://databoy-aa871.firebaseapp.com`), and create an **Object Read & Write** token scoped strictly to that bucket (see `backend/ENVIRONMENT_SETUP.md` §7 and `.env.r2.example`).
+4. Provision Cloudflare R2 private bucket (`databoy-staging-documents` or chosen bucket), disable `r2.dev` public URL, apply restricted CORS origins (`https://databoy-aa871.web.app`, `https://databoy-aa871.firebaseapp.com`), and create an **Object Read & Write** token scoped strictly to that bucket (see `backend/ENVIRONMENT_SETUP.md` §7 and `render.yaml`).
 
 ---
 
@@ -32,7 +32,7 @@
 1. Provision using `render.yaml` (`Render Dashboard -> Blueprints -> New Blueprint Instance`) or create:
    - Redis / Key Value instance -> inject `REDIS_URL`.
    - Web Service (`rootDir: backend`, build `npm ci && npm run build`, start `node dist/server.js`, health check `/api/health`).
-2. Configure environment variables (see `backend/.env.staging.example`):
+2. Configure environment variables (matching `render.yaml` and `backend/ENVIRONMENT_SETUP.md`):
    - `NODE_ENV=production`
    - `APP_ENV=staging`
    - `PAYMENTS_ENABLED=false`
@@ -63,7 +63,7 @@
 ---
 
 ## 5. Build & Deploy Frontend to Firebase Hosting
-1. Copy `.env.staging.example` to `.env.local` (or provide CI build env vars) with:
+1. Create `.env.local` locally (or provide CI build env vars) with:
    - `NEXT_PUBLIC_APP_ENV=staging`
    - `NEXT_PUBLIC_PAYMENTS_ENABLED=false`
    - `NEXT_PUBLIC_API_URL=https://<your-backend-host>`
