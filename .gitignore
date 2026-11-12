@@ -30,17 +30,11 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# env files
 .env
 .env.*
-!.env.example
-!.env.staging.example
-!.env.r2.example
-backend/.env
-backend/.env.*
-!backend/.env.example
-!backend/.env.staging.example
-!backend/.env.r2.example
+**/.env
+**/.env.*
 
 # vercel
 .vercel
