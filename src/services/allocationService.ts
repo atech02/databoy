@@ -46,13 +46,15 @@ const OFFER_TIMEOUT_MS = OFFER_TIMEOUT_MINUTES * 60 * 1000;
  *   Reputation:       0–10 pts
  */
 /**
- * Check writer eligibility strictly based on conjunction logic (Issue 2)
+ * Check writer eligibility strictly based on conjunction logic and account status
  */
 export const isWriterEligible = (writer: UserProfile): boolean => {
   return (
     writer.verificationStatus === "approved" &&
-    writer.writerStatus === "active" &&
-    writer.isVerifiedWriter === true
+    writer.status !== "suspended" &&
+    writer.performanceReviewStatus !== "suspended" &&
+    writer.isVerifiedWriter === true &&
+    writer.writerStatus !== "inactive"
   );
 };
 
@@ -61,10 +63,18 @@ export const scoreWriterForProject = (project: Project, writer: UserProfile): nu
     throw new Error(`Ineligible writer ${writer.uid} cannot be scored.`);
   }
 
-  let score = 0;
-  score += 20; // Verification bonus
+  // STRICT SEPARATION OF DUTIES: Writer cannot proofread their own written assignment
+  const isProofreadingTask =
+    project.projectType?.toLowerCase().includes("proofread") ||
+    project.serviceType?.toLowerCase().includes("proofread");
+  if (isProofreadingTask && project.writerId && project.writerId === writer.uid) {
+    return 0; // Disqualified due to separation of duties
+  }
 
-  // Subject match
+  let score = 0;
+  score += 20; // Base verification bonus
+
+  // 1. Subject match (up to 40 pts)
   const projectSubject = project.subject || "";
   const writerSpecs: string[] = writer.academic?.specializations || writer.metadata?.specializations || [];
   if (projectSubject && writerSpecs.includes(projectSubject)) {
@@ -73,10 +83,9 @@ export const scoreWriterForProject = (project: Project, writer: UserProfile): nu
     score += 20; // Partial match
   }
 
-  // Academic level match
+  // 2. Academic level match (up to 20 pts)
   const projectLevel = project.academicLevel || "degree";
   if (writer.academic?.yearOfStudy) {
-    // Postgraduate writers can handle all levels; undergraduate match their level
     const isPostgrad = writer.academic.yearOfStudy === "postgraduate";
     if (isPostgrad) {
       score += 20;
@@ -85,16 +94,58 @@ export const scoreWriterForProject = (project: Project, writer: UserProfile): nu
     }
   }
 
-  // Rating (1–5 scale, weight ×10)
-  score += (writer.reputation || 3) * 10;
+  // 3. Independent Role-Specific Performance Metric (Writing vs Proofreading)
+  const activeRating = isProofreadingTask
+    ? (writer.proofreadingRating ?? 0)
+    : (writer.writingRating ?? writer.reputation ?? 0);
 
-  // Reputation (completed tasks, capped at 10)
-  score += Math.min(writer.completedCount || 0, 10);
+  if (activeRating > 0) {
+    // Standard active rating: 1.0 to 5.0 scale (weighted x7 -> 7 to 35 pts)
+    score += activeRating * 7;
+  } else {
+    // FAIR PROVISIONAL ALLOCATION: Unrated approved writers receive provisional normal baseline (3.5 * 7 = 24.5 pts)
+    score += 24.5;
+  }
 
-  // Workload penalty (we'd need active task count — use reputation heuristic for V1)
-  // In V1, we penalize lower reputation as a proxy for busyness
-  if ((writer.reputation || 0) < 2) {
-    score -= 15;
+  // 4. Dynamic Allocation Preference Tiers
+  const preferenceTier = writer.allocationPreference || (
+    activeRating >= 4.5 ? "highest" :
+    activeRating >= 4.0 ? "high" :
+    activeRating >= 3.0 ? "normal" :
+    activeRating >= 2.0 ? "low" :
+    activeRating > 0 ? "very_low" : "normal" // Unrated receives normal provisional preference
+  );
+
+  switch (preferenceTier) {
+    case "highest":
+      score += 35;
+      break;
+    case "high":
+      score += 25;
+      break;
+    case "normal":
+      score += 15;
+      break;
+    case "low":
+      score -= 10;
+      break;
+    case "very_low":
+      score -= 25;
+      break;
+    case "at_risk":
+      score -= 50;
+      break;
+  }
+
+  // 5. Completed Tasks Experience Bonus (up to 10 pts)
+  const completed = isProofreadingTask
+    ? (writer.proofreadingCompletedTasks ?? 0)
+    : (writer.writingCompletedTasks ?? writer.completedCount ?? 0);
+  score += Math.min(completed, 10);
+
+  // 6. At-risk status penalty
+  if (writer.performanceReviewStatus === "at_risk") {
+    score -= 40;
   }
 
   return Math.max(0, score);

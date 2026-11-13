@@ -91,6 +91,25 @@ export default function AdminPanel() {
   const [paymentsData, setPaymentsData] = useState<any>(null);
   const [loadingPayments, setLoadingPayments] = useState(false);
 
+  // Writer Performance & Allocation (Phase 5.23)
+  const [writersPerformance, setWritersPerformance] = useState<any[]>([]);
+  const [loadingPerformance, setLoadingPerformance] = useState(false);
+  const [perfStatusFilter, setPerfStatusFilter] = useState("all");
+  const [perfTierFilter, setPerfTierFilter] = useState("all");
+  const [perfSearchQuery, setPerfSearchQuery] = useState("");
+  const [selectedWriterForHistory, setSelectedWriterForHistory] = useState<any | null>(null);
+  const [adjustModalWriter, setAdjustModalWriter] = useState<any | null>(null);
+  const [adjustWritingRating, setAdjustWritingRating] = useState("");
+  const [adjustProofreadingRating, setAdjustProofreadingRating] = useState("");
+  const [adjustReviewStatus, setAdjustReviewStatus] = useState("good_standing");
+  const [adjustAllocationTier, setAdjustAllocationTier] = useState("normal");
+  const [adjustReason, setAdjustReason] = useState("");
+  const [isAdjusting, setIsAdjusting] = useState(false);
+  const [actionModalWriter, setActionModalWriter] = useState<any | null>(null);
+  const [actionType, setActionType] = useState<"warning" | "improvement_plan" | "suspend_allocation" | "suspend_account">("warning");
+  const [actionMessage, setActionMessage] = useState("");
+  const [isActioning, setIsActioning] = useState(false);
+
   // ---------------------------------------------------------------------------
   // DATA LOADERS
   // ---------------------------------------------------------------------------
@@ -161,6 +180,22 @@ export default function AdminPanel() {
     } catch { /* silent */ } finally { setLoadingMetrics(false); }
   };
 
+  const loadWriterPerformance = async () => {
+    setLoadingPerformance(true);
+    try {
+      const data = await adminService.listWriterPerformance({
+        status: perfStatusFilter,
+        tier: perfTierFilter,
+        search: perfSearchQuery,
+      });
+      setWritersPerformance(data.writers || []);
+    } catch (e) {
+      console.warn("Failed to load writer performance metrics:", e);
+    } finally {
+      setLoadingPerformance(false);
+    }
+  };
+
   useEffect(() => {
     loadVerifications();
     loadAssignments();
@@ -170,7 +205,77 @@ export default function AdminPanel() {
     loadPayments();
     loadAuditLogs();
     loadMetrics();
+    loadWriterPerformance();
   }, []);
+
+  const handleOpenAdjustModal = (writer: any) => {
+    setAdjustModalWriter(writer);
+    setAdjustWritingRating(writer.writingRating > 0 ? writer.writingRating.toString() : "");
+    setAdjustProofreadingRating(writer.proofreadingRating > 0 ? writer.proofreadingRating.toString() : "");
+    setAdjustReviewStatus(writer.performanceReviewStatus || "good_standing");
+    setAdjustAllocationTier(writer.allocationPreference || "normal");
+    setAdjustReason("");
+  };
+
+  const handleOpenActionModal = (writer: any) => {
+    setActionModalWriter(writer);
+    setActionType("warning");
+    setActionMessage("");
+  };
+
+  const handleOpenHistoryModal = async (writer: any) => {
+    try {
+      const full = await adminService.getWriterPerformance(writer.uid);
+      setSelectedWriterForHistory(full.writer || writer);
+    } catch {
+      setSelectedWriterForHistory(writer);
+    }
+  };
+
+  const handleAdjustPerformance = async () => {
+    if (!adjustModalWriter) return;
+    if (!adjustReason || adjustReason.trim().length < 5) {
+      alert("A mandatory justification reason (min 5 characters) is required.");
+      return;
+    }
+    setIsAdjusting(true);
+    try {
+      await adminService.adjustWriterPerformance(adjustModalWriter.uid, {
+        writingRating: adjustWritingRating ? parseFloat(adjustWritingRating) : undefined,
+        proofreadingRating: adjustProofreadingRating ? parseFloat(adjustProofreadingRating) : undefined,
+        performanceReviewStatus: adjustReviewStatus,
+        allocationPreference: adjustAllocationTier,
+        reason: adjustReason.trim(),
+      });
+      setAdjustModalWriter(null);
+      await Promise.all([loadWriterPerformance(), loadAuditLogs()]);
+    } catch (err: any) {
+      alert(`Adjustment failed: ${err?.message || "Unknown error"}`);
+    } finally {
+      setIsAdjusting(false);
+    }
+  };
+
+  const handlePerformanceAction = async () => {
+    if (!actionModalWriter) return;
+    if (!actionMessage || actionMessage.trim().length < 5) {
+      alert("A detailed message (min 5 characters) is required.");
+      return;
+    }
+    setIsActioning(true);
+    try {
+      await adminService.performWriterAction(actionModalWriter.uid, {
+        actionType,
+        message: actionMessage.trim(),
+      });
+      setActionModalWriter(null);
+      await Promise.all([loadWriterPerformance(), loadAuditLogs()]);
+    } catch (err: any) {
+      alert(`Action failed: ${err?.message || "Unknown error"}`);
+    } finally {
+      setIsActioning(false);
+    }
+  };
 
   // ---------------------------------------------------------------------------
   // COMPUTED / FILTERED DATA
@@ -373,6 +478,7 @@ export default function AdminPanel() {
     { id: "disputes", label: `Disputes (${openDisputes.length})` },
     { id: "collections", label: `Collections (${paymentsData?.collections?.length || 0})` },
     { id: "users", label: `Users (${users.length})` },
+    { id: "performance", label: `Performance (${writersPerformance.length})` },
     { id: "metrics", label: "Metrics" },
     { id: "audit", label: "Audit Logs" },
   ];
@@ -1421,6 +1527,252 @@ export default function AdminPanel() {
       )}
 
       {/* =====================================================================
+          WRITER PERFORMANCE & ALLOCATION TAB (Phase 5.23)
+          ===================================================================== */}
+      {activeTab === "performance" && (
+        <div className="flex flex-col gap-6">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+            <div>
+              <h2 className="text-xl font-bold tracking-tight text-foreground">Specialist Writer Performance & Task Allocation</h2>
+              <p className="text-sm text-muted-foreground mt-0.5">
+                Authoritative quality scores, delivery reliability, dispute tracking, and allocation preference tiers.
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={loadWriterPerformance}
+              disabled={loadingPerformance}
+              className="text-xs"
+            >
+              🔄 Refresh Performance Data
+            </Button>
+          </div>
+
+          {/* Quick Metrics KPI cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+            <Card className="border border-border/40 bg-card">
+              <CardContent className="pt-4 pb-4 flex justify-between items-center">
+                <div>
+                  <span className="text-[10px] font-bold uppercase text-muted-foreground">Total Evaluated</span>
+                  <div className="text-2xl font-black text-foreground mt-1">{writersPerformance.length}</div>
+                </div>
+                <div className="text-2xl">👥</div>
+              </CardContent>
+            </Card>
+            <Card className="border border-border/40 bg-card">
+              <CardContent className="pt-4 pb-4 flex justify-between items-center">
+                <div>
+                  <span className="text-[10px] font-bold uppercase text-muted-foreground">High Performers (≥4.5)</span>
+                  <div className="text-2xl font-black text-success mt-1">
+                    {writersPerformance.filter(w => w.overallRating >= 4.5).length}
+                  </div>
+                </div>
+                <div className="text-2xl">🌟</div>
+              </CardContent>
+            </Card>
+            <Card className="border border-border/40 bg-card">
+              <CardContent className="pt-4 pb-4 flex justify-between items-center">
+                <div>
+                  <span className="text-[10px] font-bold uppercase text-muted-foreground">Under Review / Monitoring</span>
+                  <div className="text-2xl font-black text-warning mt-1">
+                    {writersPerformance.filter(w => ["monitoring", "under_review"].includes(w.performanceReviewStatus)).length}
+                  </div>
+                </div>
+                <div className="text-2xl">⚠️</div>
+              </CardContent>
+            </Card>
+            <Card className="border border-border/40 bg-card">
+              <CardContent className="pt-4 pb-4 flex justify-between items-center">
+                <div>
+                  <span className="text-[10px] font-bold uppercase text-muted-foreground">At-Risk (≤1.00)</span>
+                  <div className="text-2xl font-black text-destructive mt-1">
+                    {writersPerformance.filter(w => w.performanceReviewStatus === "at_risk" || (w.overallRating > 0 && w.overallRating <= 1.0)).length}
+                  </div>
+                </div>
+                <div className="text-2xl">🚨</div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Filter and Search Bar */}
+          <Card className="border-border/40 bg-card">
+            <CardContent className="pt-4 pb-4 flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between">
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="text-xs font-bold text-muted-foreground uppercase">Filter Status:</label>
+                <select
+                  value={perfStatusFilter}
+                  onChange={(e) => {
+                    setPerfStatusFilter(e.target.value);
+                  }}
+                  className="px-3 py-1.5 text-xs rounded-md border border-input bg-background text-foreground"
+                >
+                  <option value="all">All Statuses</option>
+                  <option value="unrated">Unrated</option>
+                  <option value="good_standing">Good Standing</option>
+                  <option value="monitoring">Monitoring</option>
+                  <option value="under_review">Under Review</option>
+                  <option value="at_risk">At-Risk</option>
+                  <option value="suspended">Suspended</option>
+                </select>
+
+                <label className="text-xs font-bold text-muted-foreground uppercase ml-2">Tier:</label>
+                <select
+                  value={perfTierFilter}
+                  onChange={(e) => {
+                    setPerfTierFilter(e.target.value);
+                  }}
+                  className="px-3 py-1.5 text-xs rounded-md border border-input bg-background text-foreground"
+                >
+                  <option value="all">All Tiers</option>
+                  <option value="highest">Highest (4.50 - 5.00)</option>
+                  <option value="high">High (4.00 - 4.49)</option>
+                  <option value="normal">Normal (3.00 - 3.99 / Provisional)</option>
+                  <option value="low">Low (2.00 - 2.99)</option>
+                  <option value="very_low">Very Low (1.01 - 1.99)</option>
+                  <option value="at_risk">At-Risk (≤ 1.00)</option>
+                </select>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  placeholder="Search name, email, or UID..."
+                  value={perfSearchQuery}
+                  onChange={(e) => setPerfSearchQuery(e.target.value)}
+                  className="px-3 py-1.5 text-xs rounded-md border border-input bg-background text-foreground w-full sm:w-64"
+                />
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={loadWriterPerformance}
+                  disabled={loadingPerformance}
+                  className="text-xs"
+                >
+                  Apply
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Performance Table */}
+          {loadingPerformance ? (
+            <div className="flex justify-center py-12"><Loader size="lg" /></div>
+          ) : writersPerformance.length === 0 ? (
+            <div className="text-center py-12 text-muted-foreground border border-dashed rounded-lg">
+              No specialist writers found matching the criteria.
+            </div>
+          ) : (
+            <TableContainer>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Writer Profile</TableHead>
+                    <TableHead>Capabilities</TableHead>
+                    <TableHead>Writing Rating</TableHead>
+                    <TableHead>Proofreading Rating</TableHead>
+                    <TableHead>Overall Rating</TableHead>
+                    <TableHead>On-Time %</TableHead>
+                    <TableHead>Review Status</TableHead>
+                    <TableHead>Allocation Tier</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {writersPerformance.map((w) => (
+                    <TableRow key={w.uid}>
+                      <TableCell>
+                        <div className="flex flex-col">
+                          <span className="font-bold text-foreground text-xs">{w.displayName}</span>
+                          <span className="text-[11px] text-muted-foreground">{w.email}</span>
+                          <span className="text-[9px] font-mono text-muted-foreground/70">{w.uid.substring(0, 10)}...</span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex flex-wrap gap-1">
+                          <Badge variant="secondary" className="text-[9px] uppercase font-mono py-0 px-1.5 border border-border">Writing</Badge>
+                          {w.canProofread && (
+                            <Badge variant="secondary" className="text-[9px] uppercase font-mono py-0 px-1.5 bg-primary/10 text-primary">Proofreading</Badge>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {w.writingRating && w.writingRating >= 1 ? `${w.writingRating.toFixed(2)} ★` : <span className="text-muted-foreground">Unrated</span>}
+                        <div className="text-[10px] text-muted-foreground">{w.writingCompletedTasks} tasks</div>
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {w.canProofread ? (
+                          w.proofreadingRating && w.proofreadingRating >= 1 ? `${w.proofreadingRating.toFixed(2)} ★` : <span className="text-muted-foreground">Unrated</span>
+                        ) : (
+                          <span className="text-muted-foreground/50">—</span>
+                        )}
+                        {w.canProofread && <div className="text-[10px] text-muted-foreground">{w.proofreadingCompletedTasks} reviews</div>}
+                      </TableCell>
+                      <TableCell className="font-mono text-xs font-bold text-foreground">
+                        {w.overallRating && w.overallRating >= 1 ? `${w.overallRating.toFixed(2)} ★` : <span className="text-muted-foreground font-normal">Unrated</span>}
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">
+                        <span>{w.writingOnTimeRate}%</span>
+                        {w.writingRejectionRate > 0 && (
+                          <div className="text-[10px] text-danger">{w.writingRejectionRate}% revisions</div>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          variant={
+                            w.performanceReviewStatus === "good_standing" ? "success" :
+                            w.performanceReviewStatus === "at_risk" ? "danger" :
+                            w.performanceReviewStatus === "monitoring" || w.performanceReviewStatus === "under_review" ? "warning" :
+                            w.performanceReviewStatus === "suspended" ? "danger" : "secondary"
+                          }
+                          className="text-[9px] uppercase font-mono py-0.5 px-2"
+                        >
+                          {w.performanceReviewStatus || "unrated"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="secondary" className="text-[9px] uppercase font-mono py-0.5 px-2 border-primary/40 text-primary">
+                          {w.allocationPreference || "normal"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-[11px] h-7 px-2"
+                            onClick={() => handleOpenHistoryModal(w)}
+                          >
+                            📜 History
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-[11px] h-7 px-2"
+                            onClick={() => handleOpenAdjustModal(w)}
+                          >
+                            ✏️ Adjust
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            className="text-[11px] h-7 px-2 font-bold"
+                            onClick={() => handleOpenActionModal(w)}
+                          >
+                            🛡️ Intervene
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </div>
+      )}
+
+      {/* =====================================================================
           AUDIT LOGS TAB
           ===================================================================== */}
       {activeTab === "audit" && (
@@ -1541,6 +1893,229 @@ export default function AdminPanel() {
               className="bg-success border-success hover:bg-success/90 font-bold"
             >
               ✓ Confirm Resolution
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* =====================================================================
+          WRITER PERFORMANCE HISTORY TIMELINE MODAL
+          ===================================================================== */}
+      <Modal
+        isOpen={!!selectedWriterForHistory}
+        onClose={() => setSelectedWriterForHistory(null)}
+        title={`Performance History: ${selectedWriterForHistory?.displayName || selectedWriterForHistory?.email || "Writer"}`}
+      >
+        <div className="flex flex-col gap-4 max-h-[70vh] overflow-y-auto">
+          <div className="flex justify-between items-center bg-secondary/30 p-3 rounded-lg text-xs">
+            <div>
+              <span className="text-muted-foreground">Overall Rating: </span>
+              <strong className="text-foreground">{selectedWriterForHistory?.overallRating && selectedWriterForHistory?.overallRating >= 1 ? `${selectedWriterForHistory.overallRating.toFixed(2)} ★` : "Unrated"}</strong>
+            </div>
+            <div>
+              <span className="text-muted-foreground">Status: </span>
+              <Badge variant="secondary" className="text-[10px] uppercase font-mono">
+                {selectedWriterForHistory?.performanceReviewStatus || "unrated"}
+              </Badge>
+            </div>
+            <div>
+              <span className="text-muted-foreground">Tier: </span>
+              <Badge variant="secondary" className="text-[10px] uppercase font-mono">
+                {selectedWriterForHistory?.allocationPreference || "normal"}
+              </Badge>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-3">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Rating Events Timeline</h4>
+            {!selectedWriterForHistory?.ratingHistory || selectedWriterForHistory.ratingHistory.length === 0 ? (
+              <p className="text-xs text-muted-foreground py-4 text-center">No performance rating events recorded yet.</p>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {selectedWriterForHistory.ratingHistory.slice().reverse().map((evt: any) => (
+                  <div key={evt.id} className="border border-border/40 rounded-lg p-3 bg-card text-xs flex flex-col gap-1.5">
+                    <div className="flex justify-between items-center">
+                      <span className="font-bold text-foreground capitalize flex items-center gap-1.5">
+                        {evt.actionType === "task_completed" && "✅"}
+                        {evt.actionType === "task_rejected" && "⚠️"}
+                        {evt.actionType === "dispute_verified" && "⚖️"}
+                        {evt.actionType === "admin_adjustment" && "✏️"}
+                        {evt.actionType === "admin_warning" && "📢"}
+                        {evt.actionType === "admin_improvement_plan" && "📋"}
+                        {evt.actionType === "admin_suspension" && "⛔"}
+                        {evt.reason || evt.actionType?.replace(/_/g, " ")}
+                      </span>
+                      <span className="text-[10px] text-muted-foreground font-mono">
+                        {new Date(evt.timestamp).toLocaleString()}
+                      </span>
+                    </div>
+
+                    {evt.breakdown && (
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-[10px] bg-secondary/20 p-2 rounded font-mono">
+                        <div>Quality (40%): {evt.breakdown.qualityScore}★</div>
+                        <div>Deadline (30%): {evt.breakdown.deadlineScore}★</div>
+                        <div>Revision (20%): {evt.breakdown.rejectionScore}★</div>
+                        <div>Complaint (10%): {evt.breakdown.complaintScore}★</div>
+                      </div>
+                    )}
+
+                    <div className="flex justify-between items-center text-[10px] text-muted-foreground pt-1 border-t border-border/20">
+                      <span>Rating: {evt.previousRating?.toFixed(2) ?? "—"} → <strong>{evt.newRating?.toFixed(2) ?? "—"}</strong> ({evt.scoreChange >= 0 ? `+${evt.scoreChange}` : evt.scoreChange})</span>
+                      <span>Actor: {evt.actorRole || "system"}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </Modal>
+
+      {/* =====================================================================
+          AUDITED MANUAL PERFORMANCE ADJUSTMENT MODAL
+          ===================================================================== */}
+      <Modal
+        isOpen={!!adjustModalWriter}
+        onClose={() => setAdjustModalWriter(null)}
+        title={`Adjust Performance: ${adjustModalWriter?.displayName || adjustModalWriter?.email}`}
+      >
+        <div className="flex flex-col gap-4">
+          <Alert variant="warning" title="Audited Administrative Override">
+            Manual adjustments override automated task-derived scores. A mandatory justification reason is required and will be permanently logged in the audit trail.
+          </Alert>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-semibold text-muted-foreground">Writing Rating (1.0 - 5.0)</label>
+              <input
+                type="number"
+                step="0.05"
+                min="1.0"
+                max="5.0"
+                value={adjustWritingRating}
+                onChange={(e) => setAdjustWritingRating(e.target.value)}
+                placeholder="Leave blank to preserve"
+                className="px-3 py-1.5 text-xs rounded-md border border-input bg-background text-foreground"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-semibold text-muted-foreground">Proofreading Rating (1.0 - 5.0)</label>
+              <input
+                type="number"
+                step="0.05"
+                min="1.0"
+                max="5.0"
+                value={adjustProofreadingRating}
+                onChange={(e) => setAdjustProofreadingRating(e.target.value)}
+                placeholder="Leave blank to preserve"
+                className="px-3 py-1.5 text-xs rounded-md border border-input bg-background text-foreground"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-semibold text-muted-foreground">Review Status</label>
+              <select
+                value={adjustReviewStatus}
+                onChange={(e) => setAdjustReviewStatus(e.target.value)}
+                className="px-3 py-1.5 text-xs rounded-md border border-input bg-background text-foreground"
+              >
+                <option value="good_standing">Good Standing</option>
+                <option value="monitoring">Monitoring</option>
+                <option value="under_review">Under Review</option>
+                <option value="at_risk">At-Risk</option>
+                <option value="suspended">Suspended</option>
+                <option value="unrated">Unrated</option>
+              </select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-semibold text-muted-foreground">Allocation Preference Tier</label>
+              <select
+                value={adjustAllocationTier}
+                onChange={(e) => setAdjustAllocationTier(e.target.value)}
+                className="px-3 py-1.5 text-xs rounded-md border border-input bg-background text-foreground"
+              >
+                <option value="highest">Highest (4.50 - 5.00)</option>
+                <option value="high">High (4.00 - 4.49)</option>
+                <option value="normal">Normal (3.00 - 3.99 / Provisional)</option>
+                <option value="low">Low (2.00 - 2.99)</option>
+                <option value="very_low">Very Low (1.01 - 1.99)</option>
+                <option value="at_risk">At-Risk (≤ 1.00)</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-semibold text-muted-foreground">Mandatory Justification Reason *</label>
+            <textarea
+              className="w-full px-3.5 py-2.5 text-xs bg-background border border-border/50 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 min-h-[70px] resize-y placeholder:text-muted-foreground/50"
+              placeholder="e.g. Compensating for verified technical issue during submission window; manual restoration of 4.5 star rating."
+              value={adjustReason}
+              onChange={(e) => setAdjustReason(e.target.value)}
+              required
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" size="sm" onClick={() => setAdjustModalWriter(null)}>Cancel</Button>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={handleAdjustPerformance}
+              isLoading={isAdjusting}
+              disabled={!adjustReason.trim() || adjustReason.trim().length < 5}
+            >
+              Confirm Adjustment
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* =====================================================================
+          PERFORMANCE INTERVENTION ACTION MODAL
+          ===================================================================== */}
+      <Modal
+        isOpen={!!actionModalWriter}
+        onClose={() => setActionModalWriter(null)}
+        title={`Intervention Action: ${actionModalWriter?.displayName || actionModalWriter?.email}`}
+      >
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-semibold text-muted-foreground">Intervention Type</label>
+            <select
+              value={actionType}
+              onChange={(e: any) => setActionType(e.target.value)}
+              className="px-3 py-1.5 text-xs rounded-md border border-input bg-background text-foreground"
+            >
+              <option value="warning">Official Performance Advisory / Warning</option>
+              <option value="improvement_plan">Require Performance Improvement Plan (Under Review)</option>
+              <option value="suspend_allocation">Suspend Task Allocation (Pause New Offers)</option>
+              <option value="suspend_account">Suspend Entire Account (Full Lockout)</option>
+            </select>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-semibold text-muted-foreground">Message & Directives to Specialist *</label>
+            <textarea
+              className="w-full px-3.5 py-2.5 text-xs bg-background border border-border/50 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 min-h-[80px] resize-y placeholder:text-muted-foreground/50"
+              placeholder="Explain the specific issue and requirements needed to restore good standing..."
+              value={actionMessage}
+              onChange={(e) => setActionMessage(e.target.value)}
+              required
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" size="sm" onClick={() => setActionModalWriter(null)}>Cancel</Button>
+            <Button
+              variant={actionType.includes("suspend") ? "danger" : "primary"}
+              size="sm"
+              onClick={handlePerformanceAction}
+              isLoading={isActioning}
+              disabled={!actionMessage.trim() || actionMessage.trim().length < 5}
+            >
+              Execute Intervention
             </Button>
           </div>
         </div>

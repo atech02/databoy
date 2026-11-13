@@ -8,6 +8,7 @@ import { RateLimiterBundle } from "../middleware/rateLimit.js";
 import { logAuditEvent } from "../services/auditService.js";
 import { createNotification } from "../services/notificationService.js";
 import { ledgerService } from "../services/ledgerService.js";
+import { performanceService } from "../services/performanceService.js";
 
 const noopMiddleware: RequestHandler = (_req, _res, next) => next();
 
@@ -76,6 +77,12 @@ router.post(
     try {
       const taskId = req.params.taskId as string;
       const user = req.user!;
+
+      if (user.status === "suspended" || (user as any).performanceReviewStatus === "suspended") {
+        res.status(403).json({ error: "Suspended proofreaders cannot claim tasks" });
+        return;
+      }
+
       const taskRef = adminDb.collection("proofreadingTasks").doc(taskId);
 
       const result = await adminDb.runTransaction(async (transaction) => {
@@ -235,6 +242,12 @@ router.post(
     try {
       const taskId = req.params.taskId as string;
       const user = req.user!;
+
+      if (user.status === "suspended" || (user as any).performanceReviewStatus === "suspended") {
+        res.status(403).json({ error: "Suspended proofreaders cannot claim tasks" });
+        return;
+      }
+
       const taskRef = adminDb.collection("proofreadingTasks").doc(taskId);
 
       const result = await adminDb.runTransaction(async (transaction) => {
@@ -297,6 +310,37 @@ router.post(
         details: { assignmentId: result.assignmentId, budget: result.budget },
         ip: req.ip as string | undefined,
       });
+
+      if (!result.alreadyReleased) {
+        if (result.proofreaderId) {
+          try {
+            await performanceService.recordTaskCompletion({
+              userId: result.proofreaderId,
+              taskType: "proofreading",
+              taskId,
+              taskTitle: result.title,
+              actorId: user.uid,
+              actorRole: user.role,
+            });
+          } catch (pErr) {
+            console.error("[ProofreadingRoutes] Error updating proofreader performance:", pErr);
+          }
+        }
+        if (result.originalWriterId) {
+          try {
+            await performanceService.recordTaskCompletion({
+              userId: result.originalWriterId,
+              taskType: "writing",
+              taskId: result.assignmentId,
+              taskTitle: result.title,
+              actorId: user.uid,
+              actorRole: user.role,
+            });
+          } catch (pErr) {
+            console.error("[ProofreadingRoutes] Error updating writer performance:", pErr);
+          }
+        }
+      }
 
       // Notify customer of final delivery
       await createNotification({

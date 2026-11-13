@@ -64,6 +64,55 @@ export function normalizeUserProfile(raw: any): UserProfile {
   }
   user.averageRating = user.averageRating ?? (user.reputation || 0);
 
+  // Independent writer & proofreader performance normalization (Phase 5.23)
+  if (user.role === "writer" || user.role === "proofreader") {
+    const rawWritingRating = raw?.writingRating;
+    if (typeof rawWritingRating === "number" && Number.isFinite(rawWritingRating) && (rawWritingRating === 0 || (rawWritingRating >= 1.0 && rawWritingRating <= 5.0))) {
+      user.writingRating = rawWritingRating;
+    } else {
+      user.writingRating = user.reputation || 0;
+    }
+
+    const rawProofreadingRating = raw?.proofreadingRating;
+    if (typeof rawProofreadingRating === "number" && Number.isFinite(rawProofreadingRating) && (rawProofreadingRating === 0 || (rawProofreadingRating >= 1.0 && rawProofreadingRating <= 5.0))) {
+      user.proofreadingRating = rawProofreadingRating;
+    } else {
+      user.proofreadingRating = 0;
+    }
+
+    const rawOverall = raw?.overallRating;
+    if (typeof rawOverall === "number" && Number.isFinite(rawOverall) && (rawOverall === 0 || (rawOverall >= 1.0 && rawOverall <= 5.0))) {
+      user.overallRating = rawOverall;
+    } else {
+      if (user.writingRating > 0 && user.proofreadingRating > 0) {
+        user.overallRating = Number(((user.writingRating * 0.7) + (user.proofreadingRating * 0.3)).toFixed(2));
+      } else if (user.writingRating > 0) {
+        user.overallRating = user.writingRating;
+      } else if (user.proofreadingRating > 0) {
+        user.overallRating = user.proofreadingRating;
+      } else {
+        user.overallRating = 0;
+      }
+    }
+
+    user.writingCompletedTasks = user.writingCompletedTasks ?? (user.completedAssignments || 0);
+    user.proofreadingCompletedTasks = user.proofreadingCompletedTasks ?? 0;
+    user.writingOnTimeRate = user.writingOnTimeRate ?? 100;
+    user.proofreadingOnTimeRate = user.proofreadingOnTimeRate ?? 100;
+    user.writingRejectionRate = user.writingRejectionRate ?? 0;
+    user.proofreadingRejectionRate = user.proofreadingRejectionRate ?? 0;
+    user.verifiedComplaintCount = user.verifiedComplaintCount ?? 0;
+    user.performanceReviewStatus = user.performanceReviewStatus ?? (user.completedCount > 0 ? "good_standing" : "unrated");
+    user.allocationPreference = user.allocationPreference ?? (
+      user.overallRating >= 4.5 ? "highest" :
+      user.overallRating >= 4.0 ? "high" :
+      user.overallRating >= 3.0 ? "normal" :
+      user.overallRating >= 2.0 ? "low" :
+      user.overallRating > 0 ? "very_low" : "normal" // Unrated gets normal provisional preference
+    );
+    user.ratingHistory = Array.isArray(user.ratingHistory) ? user.ratingHistory : [];
+  }
+
   return user;
 }
 

@@ -10,6 +10,58 @@ export type VerificationStatus =
 
 export type UserAvailability = "available" | "busy" | "away" | "suspended";
 
+export type PerformanceReviewStatus =
+  | "unrated"
+  | "good_standing"
+  | "monitoring"
+  | "under_review"
+  | "at_risk"
+  | "suspended";
+
+export type AllocationPreferenceTier =
+  | "highest"
+  | "high"
+  | "normal"
+  | "low"
+  | "very_low"
+  | "at_risk";
+
+export interface RatingBreakdown {
+  qualityScore: number;       // 1.0 - 5.0 (weight 40%)
+  deadlineScore: number;      // 1.0 - 5.0 (weight 30%)
+  rejectionScore: number;     // 1.0 - 5.0 (weight 20%)
+  complaintScore: number;     // 1.0 - 5.0 (weight 10%)
+  calculatedTaskScore: number;// 1.0 - 5.0
+  onTime?: boolean;
+  approvedExtension?: boolean;
+  revisionCount?: number;
+  seriousRejection?: boolean;
+  verifiedComplaint?: boolean;
+}
+
+export interface RatingHistoryEvent {
+  id: string;
+  timestamp: string;
+  taskType: "writing" | "proofreading" | "manual_adjustment";
+  taskId?: string;
+  taskTitle?: string;
+  previousRating: number;
+  newRating: number;
+  scoreChange: number;
+  reason: string;
+  breakdown?: RatingBreakdown;
+  actorId: string;
+  actorRole: string;
+  actionType?:
+    | "task_completed"
+    | "task_rejected"
+    | "dispute_verified"
+    | "admin_adjustment"
+    | "admin_warning"
+    | "admin_improvement_plan"
+    | "admin_suspension";
+}
+
 export interface UserStatusHistoryEntry {
   status: string;
   actorId: string;
@@ -104,6 +156,23 @@ export interface UserProfile {
   totalPaidOut?: number;
   canProofread?: boolean;
 
+  // Independent Writer Performance & Reputation (Phase 5.23)
+  writingRating?: number;               // 1.0 to 5.0 (0 = Unrated)
+  proofreadingRating?: number;          // 1.0 to 5.0 (0 = Unrated)
+  overallRating?: number;               // Weighted combination (0 = Unrated)
+  writingCompletedTasks?: number;
+  proofreadingCompletedTasks?: number;
+  writingOnTimeRate?: number;           // 0 to 100
+  proofreadingOnTimeRate?: number;      // 0 to 100
+  writingRejectionRate?: number;        // 0 to 100
+  proofreadingRejectionRate?: number;   // 0 to 100
+  verifiedComplaintCount?: number;
+  performanceReviewStatus?: PerformanceReviewStatus;
+  allocationPreference?: AllocationPreferenceTier;
+  ratingHistory?: RatingHistoryEvent[];
+  performanceNotes?: string;
+  lastPerformanceReviewDate?: string;
+
   createdAt: string;
   updatedAt: string;
   metadata?: {
@@ -170,6 +239,7 @@ export interface Project {
   id: string;
   title: string;
   projectType: string; // Type of academic task (Assignment, Essay, etc.)
+  serviceType?: string;
   deadline: string;
   budget: number;
   guidelines: string;

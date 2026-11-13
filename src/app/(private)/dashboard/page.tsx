@@ -1474,6 +1474,163 @@ function CustomerDashboard({ profile, refreshProfile }: SubDashboardProps) {
         </div>
       </div>
 
+      {/* 6. Independent Writer Performance & Reputation (Phase 5.23) */}
+      <div className="flex flex-col gap-4 border-t border-border/20 pt-6">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+          <div>
+            <h2 className="text-base font-black tracking-tight text-foreground flex items-center gap-2">
+              ⭐ Writer Performance & Allocation Standing
+            </h2>
+            <p className="text-xs text-muted-foreground">
+              Independent writing and proofreading metrics governing your task allocation priority.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Badge
+              variant={
+                profile.performanceReviewStatus === "good_standing"
+                  ? "success"
+                  : profile.performanceReviewStatus === "at_risk"
+                  ? "danger"
+                  : profile.performanceReviewStatus === "monitoring" || profile.performanceReviewStatus === "under_review"
+                  ? "warning"
+                  : "secondary"
+              }
+              className="uppercase font-mono text-[10px] font-bold tracking-wider py-1 px-2.5"
+            >
+              Status: {profile.performanceReviewStatus?.replace(/_/g, " ") || "Unrated"}
+            </Badge>
+            <Badge
+              variant="secondary"
+              className="uppercase font-mono text-[10px] font-bold tracking-wider py-1 px-2.5 border-primary/40 text-primary"
+            >
+              Allocation Tier: {profile.allocationPreference || (profile.overallRating && profile.overallRating >= 4.5 ? "highest" : "normal")}
+            </Badge>
+          </div>
+        </div>
+
+        {/* Status Advisory Banners */}
+        {profile.performanceReviewStatus === "at_risk" && (
+          <Alert variant="error" title="Performance Advisory: Action Required">
+            Your performance rating has dropped to at-risk levels (≤ 1.00). Please review quality guidelines, proofreader revision notes, and submit upcoming tasks strictly on time to restore your standing.
+          </Alert>
+        )}
+
+        {(!profile.overallRating || profile.overallRating === 0) && (
+          <Alert variant="info" title="Provisional Normal Allocation Active">
+            You are currently <strong>Unrated</strong>. As an approved specialist, you receive fair provisional task allocation opportunities so you can establish your track record. Complete your first tasks on-time with zero revisions to establish a top rating!
+          </Alert>
+        )}
+
+        {/* Independent Metrics Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* Writing Rating Card */}
+          <Card className="border border-border/40 bg-card">
+            <CardHeader className="pb-2">
+              <CardDescription className="text-[10px] uppercase font-bold text-muted-foreground">Writing Metric</CardDescription>
+              <CardTitle className="text-lg font-black text-foreground flex justify-between items-center">
+                <span>{profile.writingRating && profile.writingRating >= 1 ? `${profile.writingRating.toFixed(2)} ★` : "Unrated"}</span>
+                <span className="text-xl">✍️</span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="text-xs text-muted-foreground flex flex-col gap-1">
+              <div className="flex justify-between">
+                <span>Completed Tasks:</span>
+                <strong className="text-foreground">{profile.writingCompletedTasks ?? profile.completedAssignments ?? profile.completedCount ?? 0}</strong>
+              </div>
+              <div className="flex justify-between">
+                <span>On-Time Rate:</span>
+                <strong className="text-foreground">{profile.writingOnTimeRate ?? 100}%</strong>
+              </div>
+              <div className="flex justify-between">
+                <span>Revision Rate:</span>
+                <strong className="text-foreground">{profile.writingRejectionRate ?? 0}%</strong>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Proofreading Rating Card (if proofreader capability active) */}
+          <Card className={`border border-border/40 bg-card ${!profile.canProofread ? "opacity-60" : ""}`}>
+            <CardHeader className="pb-2">
+              <CardDescription className="text-[10px] uppercase font-bold text-muted-foreground">Proofreading Metric</CardDescription>
+              <CardTitle className="text-lg font-black text-foreground flex justify-between items-center">
+                <span>
+                  {profile.canProofread
+                    ? (profile.proofreadingRating && profile.proofreadingRating >= 1 ? `${profile.proofreadingRating.toFixed(2)} ★` : "Unrated")
+                    : "Not Certified"}
+                </span>
+                <span className="text-xl">🔍</span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="text-xs text-muted-foreground flex flex-col gap-1">
+              <div className="flex justify-between">
+                <span>Reviews Completed:</span>
+                <strong className="text-foreground">{profile.proofreadingCompletedTasks ?? 0}</strong>
+              </div>
+              <div className="flex justify-between">
+                <span>Review On-Time:</span>
+                <strong className="text-foreground">{profile.proofreadingOnTimeRate ?? 100}%</strong>
+              </div>
+              <div className="flex justify-between">
+                <span>Status:</span>
+                <strong className="text-foreground">{profile.canProofread ? "Certified" : "Apply via Admin"}</strong>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Combined Platform Standing */}
+          <Card className="border border-border/40 bg-card">
+            <CardHeader className="pb-2">
+              <CardDescription className="text-[10px] uppercase font-bold text-muted-foreground">Combined Standing</CardDescription>
+              <CardTitle className="text-lg font-black text-foreground flex justify-between items-center">
+                <span>{profile.overallRating && profile.overallRating >= 1 ? `${profile.overallRating.toFixed(2)} ★` : "Unrated"}</span>
+                <span className="text-xl">🏆</span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="text-xs text-muted-foreground flex flex-col gap-1">
+              <div className="flex justify-between">
+                <span>Allocation Priority:</span>
+                <strong className="text-foreground uppercase text-[10px] font-mono">{profile.allocationPreference || "Normal"}</strong>
+              </div>
+              <div className="flex justify-between">
+                <span>Verified Disputes:</span>
+                <strong className="text-foreground">{profile.verifiedComplaintCount ?? 0}</strong>
+              </div>
+              <div className="flex justify-between">
+                <span>Separation of Duties:</span>
+                <strong className="text-success text-[10px] font-mono">Enforced</strong>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Transparent Scoring Formula Summary */}
+          <Card className="border border-border/40 bg-card">
+            <CardHeader className="pb-2">
+              <CardDescription className="text-[10px] uppercase font-bold text-muted-foreground">Evaluation Weights</CardDescription>
+              <CardTitle className="text-sm font-black text-foreground">Scoring Formula</CardTitle>
+            </CardHeader>
+            <CardContent className="text-[11px] text-muted-foreground flex flex-col gap-1">
+              <div className="flex justify-between">
+                <span>Quality & Accuracy:</span>
+                <strong className="text-foreground">40%</strong>
+              </div>
+              <div className="flex justify-between">
+                <span>Deadline Adherence:</span>
+                <strong className="text-foreground">30%</strong>
+              </div>
+              <div className="flex justify-between">
+                <span>First-Pass Approvals:</span>
+                <strong className="text-foreground">20%</strong>
+              </div>
+              <div className="flex justify-between">
+                <span>Dispute-Free Delivery:</span>
+                <strong className="text-foreground">10%</strong>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+
       {/* Submit Deliverable Draft Modal (Cloudflare R2) */}
       <Modal
         isOpen={showDraftUploadModal}

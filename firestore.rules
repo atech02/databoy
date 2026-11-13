@@ -80,7 +80,22 @@ service cloud.firestore {
         'activeTaskCount',
         'averageRating',
         'suspendedReason',
-        'suspendedAt'
+        'suspendedAt',
+        'writingRating',
+        'proofreadingRating',
+        'overallRating',
+        'writingCompletedTasks',
+        'proofreadingCompletedTasks',
+        'writingOnTimeRate',
+        'proofreadingOnTimeRate',
+        'writingRejectionRate',
+        'proofreadingRejectionRate',
+        'verifiedComplaintCount',
+        'performanceReviewStatus',
+        'allocationPreference',
+        'ratingHistory',
+        'performanceNotes',
+        'lastPerformanceReviewDate'
       ];
     }
 

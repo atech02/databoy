@@ -296,4 +296,40 @@ export const adminService = {
   async reassignAssignmentBackend(assignmentId: string, writerId: string): Promise<any> {
     return apiClient.post(`/api/admin/assignments/${assignmentId}/reassign`, { writerId });
   },
+
+  async listWriterPerformance(params?: { status?: string; tier?: string; search?: string }): Promise<{ writers: any[]; count: number }> {
+    const queryParts: string[] = [];
+    if (params?.status && params.status !== "all") queryParts.push(`status=${encodeURIComponent(params.status)}`);
+    if (params?.tier && params.tier !== "all") queryParts.push(`tier=${encodeURIComponent(params.tier)}`);
+    if (params?.search && params.search.trim()) queryParts.push(`search=${encodeURIComponent(params.search.trim())}`);
+    const qs = queryParts.length ? `?${queryParts.join("&")}` : "";
+    return apiClient.get<{ writers: any[]; count: number }>(`/api/admin/writers/performance${qs}`);
+  },
+
+  async getWriterPerformance(uid: string): Promise<{ writer: any }> {
+    return apiClient.get<{ writer: any }>(`/api/admin/writers/${uid}/performance`);
+  },
+
+  async adjustWriterPerformance(
+    uid: string,
+    payload: {
+      writingRating?: number;
+      proofreadingRating?: number;
+      performanceReviewStatus?: string;
+      allocationPreference?: string;
+      reason: string;
+    }
+  ): Promise<any> {
+    return apiClient.post(`/api/admin/writers/${uid}/adjust-performance`, payload);
+  },
+
+  async performWriterAction(
+    uid: string,
+    payload: {
+      actionType: "warning" | "improvement_plan" | "suspend_allocation" | "suspend_account";
+      message: string;
+    }
+  ): Promise<any> {
+    return apiClient.post(`/api/admin/writers/${uid}/performance-action`, payload);
+  },
 };

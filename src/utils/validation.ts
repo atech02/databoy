@@ -44,6 +44,31 @@ export const validateUserProfile = (data: Partial<UserProfile>): string[] => {
     }
   }
 
+  // Validate independent writer & proofreader performance ratings if provided
+  if (data.writingRating !== undefined && data.writingRating !== null) {
+    if (typeof data.writingRating !== "number" || Number.isNaN(data.writingRating) || !Number.isFinite(data.writingRating)) {
+      errors.push("Writing rating must be a valid number.");
+    } else if (data.writingRating !== 0 && (data.writingRating < 1.0 || data.writingRating > 5.0)) {
+      errors.push("Writing rating must be between 1.0 and 5.0 (or 0 for unrated writers).");
+    }
+  }
+
+  if (data.proofreadingRating !== undefined && data.proofreadingRating !== null) {
+    if (typeof data.proofreadingRating !== "number" || Number.isNaN(data.proofreadingRating) || !Number.isFinite(data.proofreadingRating)) {
+      errors.push("Proofreading rating must be a valid number.");
+    } else if (data.proofreadingRating !== 0 && (data.proofreadingRating < 1.0 || data.proofreadingRating > 5.0)) {
+      errors.push("Proofreading rating must be between 1.0 and 5.0 (or 0 for unrated proofreaders).");
+    }
+  }
+
+  if (data.overallRating !== undefined && data.overallRating !== null) {
+    if (typeof data.overallRating !== "number" || Number.isNaN(data.overallRating) || !Number.isFinite(data.overallRating)) {
+      errors.push("Overall rating must be a valid number.");
+    } else if (data.overallRating !== 0 && (data.overallRating < 1.0 || data.overallRating > 5.0)) {
+      errors.push("Overall rating must be between 1.0 and 5.0 (or 0 for unrated users).");
+    }
+  }
+
   // Validate academic onboarding attributes if onboarded
   if (data.isOnboarded) {
     if (!data.academic) {

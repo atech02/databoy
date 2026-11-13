@@ -8,6 +8,7 @@ import { logAuditEvent } from "../services/auditService.js";
 import { createNotification } from "../services/notificationService.js";
 import { ledgerService } from "../services/ledgerService.js";
 import { linkUploadedFilesToTarget } from "../services/fileLinkService.js";
+import { performanceService } from "../services/performanceService.js";
 const noopMiddleware = (_req, _res, next) => next();
 const FORBIDDEN_ASSIGNMENT_CLIENT_FIELDS = [
     "budget",
@@ -206,6 +207,10 @@ export function createAssignmentRouter(limiters) {
             const user = req.user;
             if (!user.isVerifiedWriter && user.role !== "admin") {
                 res.status(403).json({ error: "Only verified approved writers can claim assignments" });
+                return;
+            }
+            if (user.status === "suspended" || user.performanceReviewStatus === "suspended") {
+                res.status(403).json({ error: "Suspended writers cannot claim assignments" });
                 return;
             }
             const projectRef = adminDb.collection("assignments").doc(id);
@@ -507,6 +512,19 @@ export function createAssignmentRouter(limiters) {
                 ip: req.ip,
             });
             if (result.writerId) {
+                try {
+                    await performanceService.recordTaskRejection({
+                        userId: result.writerId,
+                        taskId: id,
+                        taskTitle: result.title,
+                        feedback,
+                        actorId: user.uid,
+                        actorRole: user.role,
+                    });
+                }
+                catch (perfErr) {
+                    console.error("[AssignmentRoutes] Error recording task rejection in performance:", perfErr);
+                }
                 await createNotification({
                     userId: result.writerId,
                     title: "Revision Requested",
@@ -618,6 +636,10 @@ export function createAssignmentRouter(limiters) {
                     proofreaderId: project.proofreaderId,
                     proofreaderEmail: project.proofreaderEmail,
                     title: project.title,
+                    deadline: project.deadline,
+                    completedAt: updates.completedAt,
+                    approvedExtension: !!project.approvedExtension,
+                    revisionCount: project.revisionCount || 0,
                     budget,
                     writerPayout: escrowResult.writerAmount,
                     proofreaderPayout: escrowResult.proofreaderAmount,
@@ -642,6 +664,23 @@ export function createAssignmentRouter(limiters) {
                 });
                 // Notify writer
                 if (result.writerId) {
+                    try {
+                        await performanceService.recordTaskCompletion({
+                            userId: result.writerId,
+                            taskType: "writing",
+                            taskId: id,
+                            taskTitle: result.title,
+                            deadline: result.deadline,
+                            completedAt: result.completedAt,
+                            approvedExtension: result.approvedExtension,
+                            revisionCount: result.revisionCount,
+                            actorId: user.uid,
+                            actorRole: user.role,
+                        });
+                    }
+                    catch (perfErr) {
+                        console.error("[AssignmentRoutes] Error updating writer performance:", perfErr);
+                    }
                     await createNotification({
                         userId: result.writerId,
                         title: "Payout Released",
@@ -649,6 +688,22 @@ export function createAssignmentRouter(limiters) {
                         type: "payment",
                         link: `/app/assignments/${id}`,
                     });
+                }
+                // Record proofreader performance if applicable
+                if (result.proofreaderId) {
+                    try {
+                        await performanceService.recordTaskCompletion({
+                            userId: result.proofreaderId,
+                            taskType: "proofreading",
+                            taskId: id,
+                            taskTitle: result.title,
+                            actorId: user.uid,
+                            actorRole: user.role,
+                        });
+                    }
+                    catch (perfErr) {
+                        console.error("[AssignmentRoutes] Error updating proofreader performance:", perfErr);
+                    }
                 }
             }
             res.status(200).json({

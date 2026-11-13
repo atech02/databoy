@@ -5,6 +5,7 @@ import { requireRole } from "../middleware/roleGuard.js";
 import { logAuditEvent } from "../services/auditService.js";
 import { createNotification } from "../services/notificationService.js";
 import { ledgerService } from "../services/ledgerService.js";
+import { performanceService } from "../services/performanceService.js";
 
 const router = Router();
 
@@ -34,6 +35,24 @@ router.post("/writers/:uid/approve", async (req: Request, res: Response): Promis
       capabilities.push("proofreading");
     }
 
+    const currentData = snap.data() || {};
+    const performanceInit = {
+      reputation: currentData.reputation ?? 0,
+      writingRating: currentData.writingRating ?? 0,
+      proofreadingRating: currentData.proofreadingRating ?? 0,
+      overallRating: currentData.overallRating ?? 0,
+      writingCompletedTasks: currentData.writingCompletedTasks ?? 0,
+      proofreadingCompletedTasks: currentData.proofreadingCompletedTasks ?? 0,
+      writingOnTimeRate: currentData.writingOnTimeRate ?? 100,
+      proofreadingOnTimeRate: currentData.proofreadingOnTimeRate ?? 100,
+      writingRejectionRate: currentData.writingRejectionRate ?? 0,
+      proofreadingRejectionRate: currentData.proofreadingRejectionRate ?? 0,
+      verifiedComplaintCount: currentData.verifiedComplaintCount ?? 0,
+      performanceReviewStatus: currentData.performanceReviewStatus ?? "unrated",
+      allocationPreference: currentData.allocationPreference ?? "normal", // Provisional normal tier
+      ratingHistory: Array.isArray(currentData.ratingHistory) ? currentData.ratingHistory : [],
+    };
+
     await userRef.update({
       role: "writer",
       status: "active",
@@ -41,6 +60,7 @@ router.post("/writers/:uid/approve", async (req: Request, res: Response): Promis
       isVerifiedWriter: true,
       canProofread: !!grantProofreading,
       specialistCapabilities: capabilities,
+      ...performanceInit,
       verifiedAt: now,
       updatedAt: now,
     });
@@ -602,6 +622,27 @@ router.post("/disputes/:id/resolve", async (req: Request, res: Response): Promis
         },
         ip: req.ip as string | undefined,
       });
+
+      // If refund occurred due to deliverable failure, record verified complaint against writer
+      if (result.outcome === "refund" && result.targetId && result.targetType === "assignment") {
+        try {
+          const asgSnap = await adminDb.collection("assignments").doc(result.targetId).get();
+          if (asgSnap.exists) {
+            const asg = asgSnap.data()!;
+            if (asg.writerId) {
+              await performanceService.recordVerifiedComplaint({
+                userId: asg.writerId,
+                disputeId: id,
+                reason: notes || adminNotes || "Customer dispute refund settled",
+                actorId: user.uid,
+                actorRole: user.role,
+              });
+            }
+          }
+        } catch (compErr) {
+          console.error("[AdminRoutes] Error recording verified complaint:", compErr);
+        }
+      }
     }
 
     res.status(200).json({
@@ -863,6 +904,241 @@ router.post("/disputes", async (req: Request, res: Response): Promise<void> => {
     if (err.message === "TARGET_NOT_FOUND") return void res.status(404).json({ error: "Target record not found" });
     console.error("[AdminRoutes] Create dispute error:", err);
     res.status(500).json({ error: "Failed to create dispute" });
+  }
+});
+
+/**
+ * GET /api/admin/writers/performance
+ * List all writers with independent writing & proofreading metrics, tiers, and review statuses.
+ * Supports status, tier, and search query filters.
+ */
+router.get("/writers/performance", async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { status, tier, search } = req.query;
+
+    const snap = await adminDb.collection("users").where("role", "in", ["writer", "proofreader"]).get();
+    let writers = snap.docs.map((d) => {
+      const data = d.data();
+      const writingRating = Number(data.writingRating ?? data.reputation ?? 0);
+      const proofreadingRating = Number(data.proofreadingRating ?? 0);
+      const overallRating = Number(data.overallRating ?? (writingRating > 0 && proofreadingRating > 0
+        ? Number(((writingRating * 0.7) + (proofreadingRating * 0.3)).toFixed(2))
+        : (writingRating || proofreadingRating || 0)));
+
+      const reviewStatus = data.performanceReviewStatus || (data.completedAssignments || data.completedCount ? "good_standing" : "unrated");
+      const prefTier = data.allocationPreference || (
+        overallRating >= 4.5 ? "highest" :
+        overallRating >= 4.0 ? "high" :
+        overallRating >= 3.0 ? "normal" :
+        overallRating >= 2.0 ? "low" :
+        overallRating > 0 ? "very_low" : "normal"
+      );
+
+      return {
+        uid: d.id,
+        email: data.email || "",
+        displayName: data.displayName || data.email || "Writer",
+        role: data.role,
+        status: data.status || "active",
+        verificationStatus: data.verificationStatus || "draft",
+        isVerifiedWriter: !!data.isVerifiedWriter,
+        canProofread: !!data.canProofread,
+        specialistCapabilities: data.specialistCapabilities || ["writing"],
+        specializations: data.academic?.specializations || data.metadata?.specializations || [],
+        writingRating,
+        proofreadingRating,
+        overallRating,
+        writingCompletedTasks: Number(data.writingCompletedTasks ?? data.completedAssignments ?? data.completedCount ?? 0),
+        proofreadingCompletedTasks: Number(data.proofreadingCompletedTasks ?? 0),
+        writingOnTimeRate: Number(data.writingOnTimeRate ?? 100),
+        proofreadingOnTimeRate: Number(data.proofreadingOnTimeRate ?? 100),
+        writingRejectionRate: Number(data.writingRejectionRate ?? 0),
+        proofreadingRejectionRate: Number(data.proofreadingRejectionRate ?? 0),
+        verifiedComplaintCount: Number(data.verifiedComplaintCount ?? 0),
+        performanceReviewStatus: reviewStatus,
+        allocationPreference: prefTier,
+        lastPerformanceReviewDate: data.lastPerformanceReviewDate || null,
+        performanceNotes: data.performanceNotes || "",
+        historyCount: Array.isArray(data.ratingHistory) ? data.ratingHistory.length : 0,
+      };
+    });
+
+    // Apply status filter
+    if (typeof status === "string" && status !== "all") {
+      writers = writers.filter((w) => w.performanceReviewStatus === status);
+    }
+
+    // Apply tier filter
+    if (typeof tier === "string" && tier !== "all") {
+      writers = writers.filter((w) => w.allocationPreference === tier);
+    }
+
+    // Apply search filter (name, email, or UID)
+    if (typeof search === "string" && search.trim()) {
+      const q = search.trim().toLowerCase();
+      writers = writers.filter((w) =>
+        w.displayName.toLowerCase().includes(q) ||
+        w.email.toLowerCase().includes(q) ||
+        w.uid.toLowerCase().includes(q)
+      );
+    }
+
+    res.status(200).json({ writers, count: writers.length });
+  } catch (err: any) {
+    console.error("[AdminRoutes] Performance list error:", err);
+    res.status(500).json({ error: "Failed to fetch writer performance metrics" });
+  }
+});
+
+/**
+ * GET /api/admin/writers/:uid/performance
+ * Detailed performance record and rating history for a specific writer.
+ */
+router.get("/writers/:uid/performance", async (req: Request, res: Response): Promise<void> => {
+  try {
+    const uid = req.params.uid as string;
+    const snap = await adminDb.collection("users").doc(uid).get();
+
+    if (!snap.exists) {
+      res.status(404).json({ error: "Writer not found" });
+      return;
+    }
+
+    const data = snap.data()!;
+    const writingRating = Number(data.writingRating ?? data.reputation ?? 0);
+    const proofreadingRating = Number(data.proofreadingRating ?? 0);
+    const overallRating = Number(data.overallRating ?? (writingRating > 0 && proofreadingRating > 0
+      ? Number(((writingRating * 0.7) + (proofreadingRating * 0.3)).toFixed(2))
+      : (writingRating || proofreadingRating || 0)));
+
+    const reviewStatus = data.performanceReviewStatus || (data.completedAssignments || data.completedCount ? "good_standing" : "unrated");
+    const prefTier = data.allocationPreference || (
+      overallRating >= 4.5 ? "highest" :
+      overallRating >= 4.0 ? "high" :
+      overallRating >= 3.0 ? "normal" :
+      overallRating >= 2.0 ? "low" :
+      overallRating > 0 ? "very_low" : "normal"
+    );
+
+    res.status(200).json({
+      writer: {
+        uid,
+        email: data.email || "",
+        displayName: data.displayName || data.email || "Writer",
+        role: data.role,
+        status: data.status || "active",
+        verificationStatus: data.verificationStatus || "draft",
+        isVerifiedWriter: !!data.isVerifiedWriter,
+        canProofread: !!data.canProofread,
+        specialistCapabilities: data.specialistCapabilities || ["writing"],
+        specializations: data.academic?.specializations || data.metadata?.specializations || [],
+        writingRating,
+        proofreadingRating,
+        overallRating,
+        writingCompletedTasks: Number(data.writingCompletedTasks ?? data.completedAssignments ?? data.completedCount ?? 0),
+        proofreadingCompletedTasks: Number(data.proofreadingCompletedTasks ?? 0),
+        writingOnTimeRate: Number(data.writingOnTimeRate ?? 100),
+        proofreadingOnTimeRate: Number(data.proofreadingOnTimeRate ?? 100),
+        writingRejectionRate: Number(data.writingRejectionRate ?? 0),
+        proofreadingRejectionRate: Number(data.proofreadingRejectionRate ?? 0),
+        verifiedComplaintCount: Number(data.verifiedComplaintCount ?? 0),
+        performanceReviewStatus: reviewStatus,
+        allocationPreference: prefTier,
+        lastPerformanceReviewDate: data.lastPerformanceReviewDate || null,
+        performanceNotes: data.performanceNotes || "",
+        ratingHistory: Array.isArray(data.ratingHistory) ? data.ratingHistory : [],
+      },
+    });
+  } catch (err: any) {
+    console.error("[AdminRoutes] Performance detail error:", err);
+    res.status(500).json({ error: "Failed to fetch writer performance details" });
+  }
+});
+
+/**
+ * POST /api/admin/writers/:uid/adjust-performance
+ * Admin manual adjustment of writer performance metrics with mandatory reason and immutable audit history.
+ */
+router.post("/writers/:uid/adjust-performance", async (req: Request, res: Response): Promise<void> => {
+  try {
+    const uid = req.params.uid as string;
+    const user = req.user!;
+    const { writingRating, proofreadingRating, performanceReviewStatus, allocationPreference, reason } = req.body || {};
+
+    if (!reason || typeof reason !== "string" || reason.trim().length < 5) {
+      res.status(400).json({ error: "A mandatory justification reason (min 5 characters) is required for manual performance adjustments." });
+      return;
+    }
+
+    const result = await performanceService.adminAdjustPerformance({
+      targetUid: uid,
+      adminUid: user.uid,
+      adminEmail: user.email,
+      writingRating: typeof writingRating === "number" ? writingRating : undefined,
+      proofreadingRating: typeof proofreadingRating === "number" ? proofreadingRating : undefined,
+      performanceReviewStatus,
+      allocationPreference,
+      reason: reason.trim(),
+      ip: req.ip as string | undefined,
+    });
+
+    res.status(200).json({ success: true, message: "Writer performance adjusted successfully", user: result.updatedUser });
+  } catch (err: any) {
+    if (err.message === "USER_NOT_FOUND") {
+      res.status(404).json({ error: "Writer not found" });
+      return;
+    }
+    if (err.message === "MANDATORY_REASON_REQUIRED") {
+      res.status(400).json({ error: "A mandatory justification reason is required" });
+      return;
+    }
+    console.error("[AdminRoutes] Adjust performance error:", err);
+    res.status(500).json({ error: "Failed to adjust writer performance" });
+  }
+});
+
+/**
+ * POST /api/admin/writers/:uid/performance-action
+ * Admin performance action: warning, improvement plan, suspend allocation, suspend account.
+ */
+router.post("/writers/:uid/performance-action", async (req: Request, res: Response): Promise<void> => {
+  try {
+    const uid = req.params.uid as string;
+    const user = req.user!;
+    const { actionType, message } = req.body || {};
+
+    const validActions = ["warning", "improvement_plan", "suspend_allocation", "suspend_account"];
+    if (!actionType || !validActions.includes(actionType)) {
+      res.status(400).json({ error: `Invalid actionType. Must be one of: ${validActions.join(", ")}` });
+      return;
+    }
+
+    if (!message || typeof message !== "string" || message.trim().length < 5) {
+      res.status(400).json({ error: "A detailed message or justification (min 5 characters) is required for performance actions." });
+      return;
+    }
+
+    const result = await performanceService.adminPerformanceAction({
+      targetUid: uid,
+      adminUid: user.uid,
+      adminEmail: user.email,
+      actionType,
+      message: message.trim(),
+      ip: req.ip as string | undefined,
+    });
+
+    res.status(200).json({ success: true, message: `Performance action [${actionType}] completed`, status: result.status });
+  } catch (err: any) {
+    if (err.message === "USER_NOT_FOUND") {
+      res.status(404).json({ error: "Writer not found" });
+      return;
+    }
+    if (err.message === "MANDATORY_REASON_REQUIRED") {
+      res.status(400).json({ error: "A detailed message is required" });
+      return;
+    }
+    console.error("[AdminRoutes] Performance action error:", err);
+    res.status(500).json({ error: "Failed to execute performance action" });
   }
 });
 
