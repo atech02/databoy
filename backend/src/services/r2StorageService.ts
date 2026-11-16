@@ -12,6 +12,7 @@ import {
   ListMultipartUploadsCommand,
   GetBucketCorsCommand,
   PutBucketCorsCommand,
+  ListBucketsCommand,
   CompletedPart,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -731,6 +732,17 @@ export const r2StorageService = {
       })
     );
     return { etag: res.ETag };
+  },
+
+  async probeBuckets(): Promise<{ buckets?: string[]; error?: string }> {
+    try {
+      const config = getValidatedR2ConfigOrThrow();
+      const client = getS3Client(config);
+      const res = await client.send(new ListBucketsCommand({}));
+      return { buckets: res.Buckets?.map((b) => b.Name || "") || [] };
+    } catch (err: any) {
+      return { error: err.message || err.name };
+    }
   },
 
   async ensureDefaultBucketCors(): Promise<{ applied: boolean; rules: R2CorsRule[] }> {

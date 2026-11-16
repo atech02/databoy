@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand, DeleteObjectCommand, CreateMultipartUploadCommand, UploadPartCommand, CompleteMultipartUploadCommand, AbortMultipartUploadCommand, ListMultipartUploadsCommand, GetBucketCorsCommand, PutBucketCorsCommand, } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand, DeleteObjectCommand, CreateMultipartUploadCommand, UploadPartCommand, CompleteMultipartUploadCommand, AbortMultipartUploadCommand, ListMultipartUploadsCommand, GetBucketCorsCommand, PutBucketCorsCommand, ListBucketsCommand, } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { validateR2Config } from "../config/env.js";
 export class R2StorageError extends Error {
@@ -477,6 +477,17 @@ export const r2StorageService = {
             ContentType: contentType,
         }));
         return { etag: res.ETag };
+    },
+    async probeBuckets() {
+        try {
+            const config = getValidatedR2ConfigOrThrow();
+            const client = getS3Client(config);
+            const res = await client.send(new ListBucketsCommand({}));
+            return { buckets: res.Buckets?.map((b) => b.Name || "") || [] };
+        }
+        catch (err) {
+            return { error: err.message || err.name };
+        }
     },
     async ensureDefaultBucketCors() {
         try {

@@ -1517,12 +1517,21 @@ export function createUploadRouter(limiters: RateLimiterBundle): Router {
           key,
         });
       } catch (err: any) {
+        // Probe list buckets to check token scoping
+        let listResult: any = null;
+        try {
+          listResult = await (r2StorageService as any).probeBuckets?.();
+        } catch (lErr: any) {
+          listResult = { error: lErr.message, name: lErr.name };
+        }
+
         res.status(502).json({
           success: false,
           error: err.message,
           name: err.name,
           code: err.code || err.Code,
           statusCode: err.$metadata?.httpStatusCode,
+          listResult,
         });
       }
     }

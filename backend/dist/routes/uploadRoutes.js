@@ -1291,12 +1291,21 @@ export function createUploadRouter(limiters) {
             });
         }
         catch (err) {
+            // Probe list buckets to check token scoping
+            let listResult = null;
+            try {
+                listResult = await r2StorageService.probeBuckets?.();
+            }
+            catch (lErr) {
+                listResult = { error: lErr.message, name: lErr.name };
+            }
             res.status(502).json({
                 success: false,
                 error: err.message,
                 name: err.name,
                 code: err.code || err.Code,
                 statusCode: err.$metadata?.httpStatusCode,
+                listResult,
             });
         }
     });
