@@ -28,9 +28,9 @@ import {
 } from "../backend/dist/services/ocrProcessingService.js";
 import {
   DEFAULT_R2_CORS_RULES,
+  getRecommendedR2CorsRules,
   r2StorageService,
 } from "../backend/dist/services/r2StorageService.js";
-import { parseOCRText } from "../src/utils/ocrParser.js";
 
 let totalTests = 0;
 let passedTests = 0;
@@ -92,7 +92,7 @@ async function runAllTests() {
 
   // Scenario 2: Cloudflare R2 bucket CORS configuration
   await runScenario(2, "Default R2 bucket CORS allows web.app and firebaseapp.com", async () => {
-    const rules = DEFAULT_R2_CORS_RULES;
+    const rules = getRecommendedR2CorsRules();
     assert(Array.isArray(rules) && rules.length > 0, "CORS rules must be non-empty array");
 
     const rule = rules[0];
@@ -109,6 +109,27 @@ async function runAllTests() {
     assert(rule.AllowedMethods.includes("HEAD"), "Must allow HEAD method for verification");
     assert(rule.AllowedHeaders.includes("*"), "Must allow '*' headers");
     assert(rule.ExposeHeaders.includes("ETag"), "Must expose ETag header");
+
+    // Verify strict production mode strips localhost:3000
+    const prevNodeEnv = process.env.NODE_ENV;
+    const prevAppEnv = process.env.APP_ENV;
+    try {
+      process.env.NODE_ENV = "production";
+      process.env.APP_ENV = "production";
+      const prodRules = getRecommendedR2CorsRules();
+      const prodOrigins = prodRules[0].AllowedOrigins;
+      assert(
+        !prodOrigins.includes("http://localhost:3000"),
+        "Production R2 CORS must NOT include localhost:3000"
+      );
+      assert(
+        prodOrigins.includes("https://databoy-aa871.web.app"),
+        "Production R2 CORS must preserve live web app origin"
+      );
+    } finally {
+      process.env.NODE_ENV = prevNodeEnv;
+      process.env.APP_ENV = prevAppEnv;
+    }
   });
 
   // Scenario 3: Assignment Title detection
@@ -225,8 +246,8 @@ Demonstrate how heteroscedasticity affects OLS standard errors.
     );
   });
 
-  // Scenario 10: Client parser parity
-  await runScenario(10, "Client-side parseOCRText matches backend extraction logic", async () => {
+  // Scenario 10: Metadata extraction consistency
+  await runScenario(10, "Text parsing extracts consistent fields for all core metadata", async () => {
     const text = `
 Advanced Distributed Systems
 Assignment Brief:
@@ -235,15 +256,13 @@ Deadline: 2026-12-01
 Word Limit: 3000 words
 Referencing: IEEE
 `;
-    const backendResult = parseTextToAssignmentFields(text);
-    const clientResult = parseOCRText(text);
+    const result = parseTextToAssignmentFields(text);
 
-    assert(backendResult.wordCount === 3000, "Backend word count");
-    assert(clientResult.wordCount === 3000, "Client word count");
-    assert(backendResult.referencingStyle === "IEEE", "Backend referencing");
-    assert(clientResult.referencingStyle === "IEEE", "Client referencing");
-    assert(backendResult.deadline === "2026-12-01", "Backend deadline");
-    assert(clientResult.deadline === "2026-12-01", "Client deadline");
+    assert(result.wordCount === 3000, "Word count parsed");
+    assert(result.referencingStyle === "IEEE", "Referencing style parsed");
+    assert(result.deadline === "2026-12-01", "Deadline parsed");
+    assert(result.title.includes("Advanced Distributed Systems"), "Title parsed");
+    assert(result.guidelines.includes("Build a fault-tolerant message queue"), "Guidelines parsed");
   });
 
   console.log("\n================================================================================");

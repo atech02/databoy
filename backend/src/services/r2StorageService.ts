@@ -37,20 +37,32 @@ export interface R2CorsRule {
   MaxAgeSeconds?: number;
 }
 
-export const DEFAULT_R2_CORS_RULES: R2CorsRule[] = [
-  {
-    AllowedOrigins: [
-      "https://databoy-aa871.web.app",
-      "https://databoy-aa871.firebaseapp.com",
-      "http://localhost:3000",
-      "http://127.0.0.1:3000",
-    ],
-    AllowedMethods: ["GET", "PUT", "HEAD", "POST"],
-    AllowedHeaders: ["*"],
-    ExposeHeaders: ["ETag"],
-    MaxAgeSeconds: 3600,
-  },
-];
+export function getRecommendedR2CorsRules(): R2CorsRule[] {
+  // In strict production, exclude local development origins to protect cloud buckets
+  const isStrictProduction =
+    process.env.NODE_ENV === "production" && process.env.APP_ENV === "production";
+
+  const origins = [
+    "https://databoy-aa871.web.app",
+    "https://databoy-aa871.firebaseapp.com",
+  ];
+
+  if (!isStrictProduction) {
+    origins.push("http://localhost:3000", "http://127.0.0.1:3000");
+  }
+
+  return [
+    {
+      AllowedOrigins: origins,
+      AllowedMethods: ["GET", "PUT", "HEAD", "POST"],
+      AllowedHeaders: ["*"],
+      ExposeHeaders: ["ETag"],
+      MaxAgeSeconds: 3600,
+    },
+  ];
+}
+
+export const DEFAULT_R2_CORS_RULES: R2CorsRule[] = getRecommendedR2CorsRules();
 
 export interface StorageOperationMetrics {
   presignPutCount: number;
@@ -704,8 +716,9 @@ export const r2StorageService = {
         logStorageEvent("warn", "bucket_cors_auto_configure", {
           message: "R2 bucket CORS does not allow databoy-aa871.web.app. Applying recommended CORS configuration.",
         });
-        await r2StorageService.putBucketCors(DEFAULT_R2_CORS_RULES);
-        return { applied: true, rules: DEFAULT_R2_CORS_RULES };
+        const rules = getRecommendedR2CorsRules();
+        await r2StorageService.putBucketCors(rules);
+        return { applied: true, rules };
       }
       return { applied: false, rules: current };
     } catch (err: any) {

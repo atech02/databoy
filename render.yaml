@@ -12,7 +12,7 @@ services:
     buildCommand: npm ci --include=dev && npm run build
     startCommand: node dist/server.js
     healthCheckPath: /api/health
-    autoDeploy: false
+    autoDeploy: true
     envVars:
       - key: NODE_ENV
         value: production
@@ -56,4 +56,6 @@ services:
       - key: R2_ACCESS_KEY_ID
         sync: false
       - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: GEMINI_API_KEY
         sync: false
