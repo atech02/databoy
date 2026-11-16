@@ -122,7 +122,9 @@ export function parseTextToAssignmentFields(rawText: string): ParsedAssignmentFi
   }
 
   // 4. Deadline
-  const deadlineMatch = rawText.match(/\b(?:deadline|due\s+date|due|by)\b\s*[:\-]?\s*([^\n\r]+)/i);
+  const deadlineMatch = rawText.match(
+    /\b(?:deadline|due\s+date|due|by|final\s+submission|submission\s+deadline|submission)\b\s*[:\-]?\s*([^\n\r]+)/i
+  );
   if (deadlineMatch) {
     const parsedDate = parseDateToYMD(deadlineMatch[1]);
     if (parsedDate) {
@@ -140,12 +142,22 @@ export function parseTextToAssignmentFields(rawText: string): ParsedAssignmentFi
       }
     }
   }
+  if (!fields.deadline) {
+    // ISO date fallback YYYY-MM-DD
+    const isoDateMatch = rawText.match(/\b(\d{4}[-/]\d{2}[-/]\d{2})\b/);
+    if (isoDateMatch) {
+      const parsedDate = parseDateToYMD(isoDateMatch[1]);
+      if (parsedDate) {
+        fields.deadline = parsedDate;
+      }
+    }
+  }
 
   // 5. Academic Level
   const academicLevels: Array<[RegExp, string]> = [
     [/\b(?:phd|doctorate|doctoral)\b/i, "phd"],
-    [/\b(?:master['’]?s?|postgraduate|msc|mba|ma)\b/i, "masters"],
-    [/\b(?:undergraduate|bachelor['’]?s?|bsc|ba)\b/i, "degree"],
+    [/\b(?:master['’]?s?|postgraduate|msc|mba|ma|llm)\b/i, "masters"],
+    [/\b(?:undergraduate|bachelor['’]?s?|bsc|ba|degree)\b/i, "degree"],
     [/\b(?:diploma|higher\s+national\s+diploma|hnd)\b/i, "diploma"],
     [/\b(?:high\s+school|secondary\s+school)\b/i, "high_school"],
   ];
