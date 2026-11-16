@@ -10,6 +10,8 @@ import {
   CompleteMultipartUploadCommand,
   AbortMultipartUploadCommand,
   ListMultipartUploadsCommand,
+  GetBucketCorsCommand,
+  PutBucketCorsCommand,
   CompletedPart,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -26,6 +28,29 @@ export class R2StorageError extends Error {
     this.statusCode = statusCode;
   }
 }
+
+export interface R2CorsRule {
+  AllowedOrigins: string[];
+  AllowedMethods: string[];
+  AllowedHeaders?: string[];
+  ExposeHeaders?: string[];
+  MaxAgeSeconds?: number;
+}
+
+export const DEFAULT_R2_CORS_RULES: R2CorsRule[] = [
+  {
+    AllowedOrigins: [
+      "https://databoy-aa871.web.app",
+      "https://databoy-aa871.firebaseapp.com",
+      "http://localhost:3000",
+      "http://127.0.0.1:3000",
+    ],
+    AllowedMethods: ["GET", "PUT", "HEAD", "POST"],
+    AllowedHeaders: ["*"],
+    ExposeHeaders: ["ETag"],
+    MaxAgeSeconds: 3600,
+  },
+];
 
 export interface StorageOperationMetrics {
   presignPutCount: number;
@@ -239,11 +264,15 @@ export const r2StorageService = {
     const client = getS3Client(config);
     const ttl = Math.min(params.expiresInSeconds || config.presignedPutTtlSeconds, 900);
 
+    // Note: Do NOT include ContentLength in PutObjectCommand for presigning.
+    // Specifying ContentLength forces AWS SDK to add 'content-length' to X-Amz-SignedHeaders.
+    // In browsers, setting 'Content-Length' via XHR is strictly forbidden, causing signature
+    // mismatches or CORS preflight rejection when uploaded from client browsers.
+    // File size is still validated prior to presigning and strictly verified via headObject on complete.
     const command = new PutObjectCommand({
       Bucket: config.bucketName,
       Key: params.storageKey,
       ContentType: params.contentType,
-      ContentLength: params.contentLength,
     });
 
     const uploadUrl = await getSignedUrl(client, command, { expiresIn: ttl });
@@ -426,7 +455,6 @@ export const r2StorageService = {
       Key: params.storageKey,
       UploadId: params.uploadId,
       PartNumber: params.partNumber,
-      ...(params.contentLength ? { ContentLength: params.contentLength } : {}),
     });
 
     const uploadUrl = await getSignedUrl(client, command, { expiresIn: ttl });
@@ -560,5 +588,131 @@ export const r2StorageService = {
     });
 
     return { scanned: uploads.length, aborted };
+  },
+
+  async getObjectBuffer(storageKey: string): Promise<Buffer> {
+    const config = getValidatedR2ConfigOrThrow();
+    const client = getS3Client(config);
+
+    try {
+      const response = await executeWithRetry(
+        "getObjectBuffer",
+        config.requestTimeoutMs,
+        2,
+        (signal) =>
+          client.send(
+            new GetObjectCommand({
+              Bucket: config.bucketName,
+              Key: storageKey,
+            }),
+            { abortSignal: signal }
+          )
+      );
+
+      if (!response.Body) {
+        throw new R2StorageError("R2_GET_FAILED", "Empty body returned from R2 storage", 502);
+      }
+
+      const byteArray = await response.Body.transformToByteArray();
+      return Buffer.from(byteArray);
+    } catch (err: any) {
+      if (err instanceof R2StorageError) throw err;
+      throw new R2StorageError(
+        "R2_GET_FAILED",
+        `Failed to retrieve object from R2 storage: ${sanitizeStorageErrorMessage(err)}`,
+        502
+      );
+    }
+  },
+
+  async getBucketCors(): Promise<R2CorsRule[]> {
+    const config = getValidatedR2ConfigOrThrow();
+    const client = getS3Client(config);
+
+    try {
+      const response = await executeWithRetry(
+        "getBucketCors",
+        config.requestTimeoutMs,
+        1,
+        (signal) =>
+          client.send(
+            new GetBucketCorsCommand({
+              Bucket: config.bucketName,
+            }),
+            { abortSignal: signal }
+          )
+      );
+
+      return (response.CORSRules as R2CorsRule[]) || [];
+    } catch (err: any) {
+      const status = err?.$metadata?.httpStatusCode;
+      const code = String(err?.name || err?.Code || "");
+      if (status === 404 || code === "NoSuchCORSConfiguration") {
+        return [];
+      }
+      if (err instanceof R2StorageError) throw err;
+      throw new R2StorageError(
+        "R2_CORS_GET_FAILED",
+        `Failed to get R2 bucket CORS: ${sanitizeStorageErrorMessage(err)}`,
+        502
+      );
+    }
+  },
+
+  async putBucketCors(rules: R2CorsRule[] = DEFAULT_R2_CORS_RULES): Promise<void> {
+    const config = getValidatedR2ConfigOrThrow();
+    const client = getS3Client(config);
+
+    try {
+      await executeWithRetry(
+        "putBucketCors",
+        config.requestTimeoutMs,
+        2,
+        (signal) =>
+          client.send(
+            new PutBucketCorsCommand({
+              Bucket: config.bucketName,
+              CORSConfiguration: {
+                CORSRules: rules,
+              },
+            }),
+            { abortSignal: signal }
+          )
+      );
+
+      logStorageEvent("info", "bucket_cors_updated", {
+        bucket: config.bucketName,
+        ruleCount: rules.length,
+      });
+    } catch (err: any) {
+      if (err instanceof R2StorageError) throw err;
+      throw new R2StorageError(
+        "R2_CORS_PUT_FAILED",
+        `Failed to set R2 bucket CORS: ${sanitizeStorageErrorMessage(err)}`,
+        502
+      );
+    }
+  },
+
+  async ensureDefaultBucketCors(): Promise<{ applied: boolean; rules: R2CorsRule[] }> {
+    try {
+      const current = await r2StorageService.getBucketCors();
+      const hasWebOrigin = current.some((r) =>
+        r.AllowedOrigins.some((o) => o === "*" || o.includes("databoy-aa871.web.app"))
+      );
+      if (!hasWebOrigin || current.length === 0) {
+        logStorageEvent("warn", "bucket_cors_auto_configure", {
+          message: "R2 bucket CORS does not allow databoy-aa871.web.app. Applying recommended CORS configuration.",
+        });
+        await r2StorageService.putBucketCors(DEFAULT_R2_CORS_RULES);
+        return { applied: true, rules: DEFAULT_R2_CORS_RULES };
+      }
+      return { applied: false, rules: current };
+    } catch (err: any) {
+      logStorageEvent("warn", "bucket_cors_auto_configure_warning", {
+        error: sanitizeStorageErrorMessage(err),
+      });
+      return { applied: false, rules: [] };
+    }
   },
 };

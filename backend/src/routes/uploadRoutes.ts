@@ -12,7 +12,9 @@ import {
   r2StorageService,
   R2StorageError,
   sanitizeStorageErrorMessage,
+  DEFAULT_R2_CORS_RULES,
 } from "../services/r2StorageService.js";
+import { ocrProcessingService } from "../services/ocrProcessingService.js";
 
 const TARGET_TYPES = [
   "assignment",
@@ -1416,6 +1418,108 @@ export function createUploadRouter(limiters: RateLimiterBundle): Router {
         });
       } catch (err: any) {
         handleStorageRouteError(res, "delete", err);
+      }
+    }
+  );
+
+  /**
+   * POST /api/uploads/:fileId/ocr
+   * Runs authoritative OCR / assignment understanding on the verified R2 document.
+   */
+  const handleOcrRequest = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const fileId = (req.params.fileId || req.body?.fileId) as string;
+      if (!fileId || typeof fileId !== "string") {
+        res.status(400).json({ error: "Missing required fileId parameter" });
+        return;
+      }
+
+      const user = req.user!;
+      const fileRef = adminDb.collection(FILE_OBJECTS_COLLECTION).doc(fileId);
+      const snap = await fileRef.get();
+
+      if (!snap.exists) {
+        res.status(404).json({ error: "Uploaded file record not found" });
+        return;
+      }
+
+      const fileRecord = snap.data()!;
+      if (fileRecord.ownerUid !== user.uid && user.role !== "admin") {
+        const canAccess = await verifyUserCanAccessFileRecord(user, fileRecord);
+        if (!canAccess) {
+          res.status(403).json({ error: "Access denied to document OCR" });
+          return;
+        }
+      }
+
+      if (fileRecord.status === "deleted" || fileRecord.status === "aborted") {
+        res.status(409).json({ error: `Cannot run OCR on file in '${fileRecord.status}' state` });
+        return;
+      }
+
+      const result = await ocrProcessingService.processFile({
+        fileId,
+        storageKey: fileRecord.storageKey,
+        contentType: fileRecord.contentType || "application/octet-stream",
+        fileName: fileRecord.fileName || "document",
+        userUid: user.uid,
+      });
+
+      res.status(200).json({
+        success: true,
+        fileId,
+        rawText: result.rawText,
+        parsedFields: result.parsedFields,
+        parsed: result.parsedFields, // compatibility alias
+        confidence: result.confidence,
+        ocrMetrics: result.ocrMetrics,
+      });
+    } catch (err: any) {
+      handleStorageRouteError(res, "ocr", err);
+    }
+  };
+
+  router.post("/:fileId/ocr", authMiddleware, limiters.general, handleOcrRequest);
+  router.post("/ocr", authMiddleware, limiters.general, handleOcrRequest);
+
+  /**
+   * Admin Storage CORS Diagnostics & Configuration
+   * GET  /api/uploads/admin/cors
+   * POST /api/uploads/admin/cors/apply
+   */
+  router.get(
+    "/admin/cors",
+    authMiddleware,
+    requireRole("admin"),
+    async (req: Request, res: Response): Promise<void> => {
+      try {
+        const rules = await r2StorageService.getBucketCors();
+        res.status(200).json({ success: true, rules });
+      } catch (err: any) {
+        handleStorageRouteError(res, "getBucketCors", err);
+      }
+    }
+  );
+
+  router.post(
+    "/admin/cors/apply",
+    authMiddleware,
+    requireRole("admin"),
+    async (req: Request, res: Response): Promise<void> => {
+      try {
+        const rules = Array.isArray(req.body?.rules) ? req.body.rules : DEFAULT_R2_CORS_RULES;
+        await r2StorageService.putBucketCors(rules);
+        await logAuditEvent({
+          action: "r2_cors_updated",
+          actorId: req.user!.uid,
+          actorRole: req.user!.role,
+          targetId: "r2_bucket",
+          details: { ruleCount: rules.length },
+          ip: req.ip as string | undefined,
+        });
+        res.status(200).json({ success: true, rules });
+      } catch (err: any) {
+        handleStorageRouteError(res, "putBucketCors", err);
       }
     }
   );

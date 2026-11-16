@@ -63,7 +63,11 @@ export function parseOCRText(rawText: string): ParsedAssignmentFields {
   const lines = rawText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
 
   // 1. Identify Assignment Title
-  const titleKeywords = ["due", "deadline", "date", "referencing", "style", "word", "count", "page", "instructor", "course", "module", "university"];
+  const titleKeywords = [
+    "due", "deadline", "date", "referencing", "style", "word",
+    "count", "page", "instructor", "course", "module", "university",
+    "school", "faculty", "department", "college"
+  ];
   const titleCandidate = lines.find(line => {
     if (line.length < 5 || line.length > 80) return false;
     const lower = line.toLowerCase();

@@ -352,27 +352,82 @@ export class PDFTextExtractor implements DocumentExtractor {
   }
 }
 
+export class ImageTextExtractor implements DocumentExtractor {
+  private async loadTesseract(): Promise<any> {
+    if (typeof window === "undefined") return null;
+    const win = window as any;
+    if (win.Tesseract) {
+      return win.Tesseract;
+    }
+
+    return new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+      script.async = true;
+      script.onload = () => {
+        resolve((window as any).Tesseract);
+      };
+      script.onerror = () => reject(new Error("Failed to load OCR engine from CDN."));
+      document.body.appendChild(script);
+    });
+  }
+
+  async extractText(
+    file: File,
+    onProgress: (progress: ExtractionProgress) => void
+  ): Promise<ExtractionResult> {
+    onProgress({ status: "Loading optical recognition engine...", progressPercent: 20 });
+    const Tesseract = await this.loadTesseract();
+
+    onProgress({ status: "Recognizing characters from image...", progressPercent: 50 });
+    const ret = await Tesseract.recognize(file, "eng", {
+      logger: (m: any) => {
+        if (m.status === "recognizing text" && typeof m.progress === "number") {
+          onProgress({
+            status: "Reading text from assignment image...",
+            progressPercent: Math.round(50 + m.progress * 40),
+          });
+        }
+      },
+    });
+
+    const text = (ret?.data?.text || "").trim();
+    const confidence = Math.round(ret?.data?.confidence || 85);
+
+    return {
+      rawText: text,
+      confidence: Math.max(10, Math.min(100, confidence)),
+      method: "Client Image OCR",
+    };
+  }
+}
+
 /**
  * Registry mapping file extensions to matching DocumentExtractors
- * Strictly respects priority sequence: DOCX -> PDF.
+ * Strictly respects priority sequence: DOCX -> PDF -> Image.
  */
 export const DocumentProcessor = {
   async process(
     file: File,
     onProgress: (progress: ExtractionProgress) => void
   ): Promise<ExtractionResult> {
-    const ext = file.name.split(".").pop()?.toLowerCase();
-    
+    const ext = file.name.split(".").pop()?.toLowerCase() || "";
+
     if (ext === "docx" || ext === "doc") {
       const docxExtractor = new DOCXTextExtractor();
       return await docxExtractor.extractText(file, onProgress);
     }
-    
+
     if (ext === "pdf") {
       const pdfExtractor = new PDFTextExtractor();
       return await pdfExtractor.extractText(file, onProgress);
     }
-    
+
+    if (["png", "jpg", "jpeg", "webp"].includes(ext)) {
+      const imgExtractor = new ImageTextExtractor();
+      return await imgExtractor.extractText(file, onProgress);
+    }
+
     throw new Error(`Unsupported document extension: .${ext}`);
-  }
+  },
 };

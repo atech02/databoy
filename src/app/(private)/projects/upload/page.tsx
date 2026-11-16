@@ -154,6 +154,9 @@ export default function UploadProject() {
 
     const newDiagnostics: any = {
       fileType,
+      stage: "Uploading to R2...",
+      uploadStatus: "Pending",
+      ocrStatus: "Pending",
       method: "Pending...",
       charCount: 0,
       preview: "",
@@ -165,6 +168,8 @@ export default function UploadProject() {
       briefApplied: "No",
       titleApplied: "No",
       wordCountApplied: "No",
+      uploadErrors: [],
+      ocrErrors: [],
       errors: []
     };
     setDiagnostics(newDiagnostics);
@@ -172,12 +177,13 @@ export default function UploadProject() {
     setBriefFile(file);
     setIsOcrProcessing(true);
     setOcrProgress(10);
-    setOcrLog("Uploading brief document...");
+    setOcrLog("Uploading brief document to private storage...");
     setOcrConfidence(null);
     setOcrMetrics(null);
 
     let downloadedUrl = "";
     let filePath = "";
+    let uploadedFileId = "";
     try {
       if (!profile?.uid) {
         throw new Error("You must be signed in to upload assignment files.");
@@ -187,6 +193,11 @@ export default function UploadProject() {
       });
       downloadedUrl = uploadRes.url;
       filePath = uploadRes.storageKey;
+      uploadedFileId = uploadRes.fileId;
+
+      newDiagnostics.uploadStatus = "Success";
+      newDiagnostics.stage = "Upload Verified, Extracting Text...";
+      setDiagnostics({ ...newDiagnostics });
 
       const briefProjectFile: ProjectFile = {
         uid: "file-brief-" + Math.floor(1000 + Math.random() * 9000),
@@ -207,9 +218,14 @@ export default function UploadProject() {
         ...prev.filter(f => !f.uid.startsWith("file-brief-"))
       ]);
     } catch (err: any) {
-      newDiagnostics.errors.push("Storage Upload Failure: " + (err?.message || String(err)));
+      const errMsg = err?.message || String(err);
+      newDiagnostics.uploadStatus = "Failed";
+      newDiagnostics.stage = "Upload Failed";
+      newDiagnostics.uploadErrors.push("Storage Upload Failure: " + errMsg);
+      newDiagnostics.errors.push("Storage Upload Failure: " + errMsg);
       setDiagnostics({ ...newDiagnostics });
       setIsOcrProcessing(false);
+      setOcrLog("Upload failed. Please check your connection or retry.");
       return;
     }
 
@@ -224,19 +240,35 @@ export default function UploadProject() {
         projectId,
         profile?.uid || "unknown-customer",
         downloadedUrl,
-        filePath
+        filePath,
+        uploadedFileId
       );
       
-      newDiagnostics.method = result.ocrMetrics.extractionMethod;
-      newDiagnostics.charCount = result.rawText.length;
+      const charCount = (result.rawText || "").length;
+      newDiagnostics.method = result.ocrMetrics?.extractionMethod || "Extraction Complete";
+      newDiagnostics.charCount = charCount;
       newDiagnostics.preview = result.rawText.substring(0, 500);
+
+      if (charCount > 0) {
+        newDiagnostics.ocrStatus = "Success";
+        newDiagnostics.stage = "Text Extracted, Parsing Assignment...";
+      } else {
+        newDiagnostics.ocrStatus = "Warning";
+        newDiagnostics.stage = "0 Characters Extracted";
+        newDiagnostics.ocrErrors.push("No readable characters detected in uploaded document. Manual input required.");
+      }
+
       setExtractedOcrText(result.rawText);
       setOcrConfidence(result.confidence);
       setOcrMetrics(result.ocrMetrics);
       setDiagnostics({ ...newDiagnostics });
     } catch (err: any) {
-      const errType = fileType === "PDF" ? "PDF Extraction Failure" : "Multimodal API Failure";
-      newDiagnostics.errors.push(`${errType}: ${err?.message || String(err)}`);
+      const errMsg = err?.message || String(err);
+      const errType = fileType === "PDF" ? "PDF Extraction Failure" : "OCR Extraction Failure";
+      newDiagnostics.ocrStatus = "Failed";
+      newDiagnostics.stage = "OCR Failed";
+      newDiagnostics.ocrErrors.push(`${errType}: ${errMsg}`);
+      newDiagnostics.errors.push(`${errType}: ${errMsg}`);
       newDiagnostics.method = err?.ocrMetrics?.extractionMethod || "Failed";
       setDiagnostics({ ...newDiagnostics });
       setIsOcrProcessing(false);
@@ -537,45 +569,67 @@ export default function UploadProject() {
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="pt-4 flex flex-col gap-3">
+                      {/* Pipeline Status Summary Bar */}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-2.5 rounded-lg bg-secondary/30 border border-border/20 text-[10px]">
+                        <div>
+                          <span className="text-muted-foreground block font-bold uppercase text-[9px]">File Type</span>
+                          <span className="font-bold text-foreground">{diagnostics.fileType}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground block font-bold uppercase text-[9px]">R2 Upload</span>
+                          <span className={`font-bold ${diagnostics.uploadStatus === "Success" ? "text-success" : diagnostics.uploadStatus === "Failed" ? "text-danger" : "text-amber-500"}`}>
+                            {diagnostics.uploadStatus === "Success" ? "✓ Verified" : diagnostics.uploadStatus === "Failed" ? "✗ Failed" : "⏳ Pending"}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground block font-bold uppercase text-[9px]">OCR Extraction</span>
+                          <span className={`font-bold ${diagnostics.ocrStatus === "Success" ? "text-success" : diagnostics.ocrStatus === "Failed" ? "text-danger" : diagnostics.ocrStatus === "Warning" ? "text-amber-500" : "text-amber-500"}`}>
+                            {diagnostics.ocrStatus === "Success" ? "✓ Extracted" : diagnostics.ocrStatus === "Failed" ? "✗ Failed" : diagnostics.ocrStatus === "Warning" ? "⚠️ 0 Chars" : "⏳ Pending"}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground block font-bold uppercase text-[9px]">Method</span>
+                          <span className="font-bold text-foreground truncate block">{diagnostics.method}</span>
+                        </div>
+                      </div>
+
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 border-b border-border/20 pb-3">
                         <div>
-                          <span className="text-[10px] font-bold text-muted-foreground uppercase block">Step 1: File Type Detected</span>
-                          <span className="text-foreground font-bold">{diagnostics.fileType}</span>
+                          <span className="text-[10px] font-bold text-muted-foreground uppercase block">Step 1: Current Stage</span>
+                          <span className="text-foreground font-bold">{diagnostics.stage || "Processing"}</span>
                         </div>
                         <div>
-                          <span className="text-[10px] font-bold text-muted-foreground uppercase block">Step 2: Extraction Method Selected</span>
-                          <span className="text-foreground font-bold">{diagnostics.method}</span>
+                          <span className="text-[10px] font-bold text-muted-foreground uppercase block">Step 2: Extracted Characters</span>
+                          <span className={`font-bold ${diagnostics.charCount > 0 ? "text-success" : "text-amber-500"}`}>
+                            {diagnostics.charCount} characters {diagnostics.charCount === 0 && !isOcrProcessing ? "(Manual input recommended)" : ""}
+                          </span>
                         </div>
-                        <div>
-                          <span className="text-[10px] font-bold text-muted-foreground uppercase block">Step 3: Raw Text Length</span>
-                          <span className="text-foreground font-bold">Extracted Characters: {diagnostics.charCount}</span>
-                        </div>
-                        <div>
-                          <span className="text-[10px] font-bold text-muted-foreground uppercase block">Step 6: UI Population Check</span>
-                          <div className="flex flex-col gap-0.5 mt-0.5 text-[10px]">
-                            <span>Assignment Brief Applied: <strong className={diagnostics.briefApplied === "Yes" ? "text-success" : "text-amber-500"}>{diagnostics.briefApplied}</strong></span>
-                            <span>Assignment Title Applied: <strong className={diagnostics.titleApplied === "Yes" ? "text-success" : "text-amber-500"}>{diagnostics.titleApplied}</strong></span>
+                        <div className="sm:col-span-2">
+                          <span className="text-[10px] font-bold text-muted-foreground uppercase block">Step 3: UI Field Population Status</span>
+                          <div className="flex flex-wrap gap-3 mt-1 text-[10px]">
+                            <span>Brief Applied: <strong className={diagnostics.briefApplied === "Yes" ? "text-success" : "text-amber-500"}>{diagnostics.briefApplied}</strong></span>
+                            <span>Title Applied: <strong className={diagnostics.titleApplied === "Yes" ? "text-success" : "text-amber-500"}>{diagnostics.titleApplied}</strong></span>
                             <span>Word Count Applied: <strong className={diagnostics.wordCountApplied === "Yes" ? "text-success" : "text-amber-500"}>{diagnostics.wordCountApplied}</strong></span>
                           </div>
                         </div>
                       </div>
 
                       <div className="border-b border-border/20 pb-3">
-                        <span className="text-[10px] font-bold text-muted-foreground uppercase block mb-1">Step 4: First 500 Characters Preview</span>
-                        <pre className="p-2.5 bg-secondary/35 rounded-lg border border-border/30 max-h-[120px] overflow-y-auto whitespace-pre-wrap text-[10px] leading-relaxed text-foreground/80">
-                          {diagnostics.preview || "(Waiting for raw text...)"}
+                        <span className="text-[10px] font-bold text-muted-foreground uppercase block mb-1">Step 4: Extracted Text Preview (First 500 chars)</span>
+                        <pre className="p-2.5 bg-secondary/35 rounded-lg border border-border/30 max-h-[120px] overflow-y-auto whitespace-pre-wrap text-[10px] leading-relaxed text-foreground/80 font-mono">
+                          {diagnostics.preview || "(Waiting for text extraction...)"}
                         </pre>
                       </div>
 
                       <div className="border-b border-border/20 pb-3">
                         <span className="text-[10px] font-bold text-muted-foreground uppercase block mb-1">Step 5: Parser Output</span>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[10px] font-semibold text-foreground/90">
-                          <div>Detected Assignment Title: <span className="font-bold text-foreground">{diagnostics.parsedTitle}</span></div>
+                          <div>Detected Title: <span className="font-bold text-foreground">{diagnostics.parsedTitle}</span></div>
                           <div>Detected Word Count: <span className="font-bold text-foreground">{diagnostics.parsedWordCount !== undefined ? diagnostics.parsedWordCount : "None"}</span></div>
-                          <div>Detected Referencing Style: <span className="font-bold text-foreground">{diagnostics.parsedReferencingStyle}</span></div>
+                          <div>Detected Referencing: <span className="font-bold text-foreground">{diagnostics.parsedReferencingStyle}</span></div>
                           <div>Detected Deadline: <span className="font-bold text-foreground">{diagnostics.parsedDeadline}</span></div>
                           <div className="sm:col-span-2 mt-1">
-                            <span className="text-muted-foreground block text-[9px] uppercase font-bold mb-0.5">Detected Assignment Brief (Start):</span>
+                            <span className="text-muted-foreground block text-[9px] uppercase font-bold mb-0.5">Detected Brief Content:</span>
                             <span className="italic block bg-secondary/10 p-1.5 rounded border border-border/10 truncate max-w-full">
                               {diagnostics.parsedBrief}
                             </span>
@@ -584,17 +638,27 @@ export default function UploadProject() {
                       </div>
 
                       <div>
-                        <span className="text-[10px] font-bold text-muted-foreground uppercase block mb-1">Step 7: Error Logging</span>
+                        <span className="text-[10px] font-bold text-muted-foreground uppercase block mb-1">Step 6: Error & Diagnostics Log</span>
                         {diagnostics.errors && diagnostics.errors.length > 0 ? (
                           <div className="flex flex-col gap-1.5">
-                            {diagnostics.errors.map((err: string, idx: number) => (
+                            {diagnostics.uploadErrors && diagnostics.uploadErrors.length > 0 && (
+                              <div className="bg-danger/10 border border-danger/30 p-2 rounded-lg text-danger text-[10px] font-bold">
+                                <strong>R2 Upload Error:</strong> {diagnostics.uploadErrors.join(" • ")}
+                              </div>
+                            )}
+                            {diagnostics.ocrErrors && diagnostics.ocrErrors.length > 0 && (
+                              <div className="bg-amber-500/10 border border-amber-500/30 p-2 rounded-lg text-amber-600 text-[10px] font-bold">
+                                <strong>OCR Processing Note:</strong> {diagnostics.ocrErrors.join(" • ")}
+                              </div>
+                            )}
+                            {!diagnostics.uploadErrors?.length && !diagnostics.ocrErrors?.length && diagnostics.errors.map((err: string, idx: number) => (
                               <div key={idx} className="bg-danger/10 border border-danger/20 p-2 rounded-lg text-danger text-[10px] font-bold">
                                 ❌ {err}
                               </div>
                             ))}
                           </div>
                         ) : (
-                          <span className="text-[10px] text-success font-bold block">✓ No errors captured in pipeline execution.</span>
+                          <span className="text-[10px] text-success font-bold block">✓ Pipeline healthy: No upload or extraction errors captured.</span>
                         )}
                       </div>
                     </CardContent>

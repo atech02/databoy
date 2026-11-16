@@ -120,18 +120,37 @@ export const processocrjob = onDocumentCreated({
 
     // 3. Process workload
     const processPromise = (async () => {
-      const bucket = storage.bucket();
-      const file = bucket.file(jobData.filePath);
+      // If file is stored in Cloudflare R2, GCS bucket does not contain it.
+      if (jobData.storageProvider === "r2" || jobData.storageKey) {
+        console.log(`Job ${jobId} file is in Cloudflare R2 (${jobData.filePath}). OCR is handled by authoritative Express backend.`);
+        return {
+          rawText: jobData.rawText || "",
+          parsedFields: jobData.parsedFields || {},
+          metrics: { modelUsed: "r2_backend_delegated" },
+        };
+      }
 
-      console.log(`Downloading file: ${jobData.filePath} from bucket: ${bucket.name}`);
-      const [fileBuffer] = await file.download();
+      try {
+        const bucket = storage.bucket();
+        const file = bucket.file(jobData.filePath);
 
-      console.log(`Invoking AssignmentUnderstandingProvider for job ${jobId}`);
-      const provider = new GeminiFlashProvider();
-      const apiKey = process.env.GEMINI_API_KEY;
+        console.log(`Downloading file: ${jobData.filePath} from bucket: ${bucket.name}`);
+        const [fileBuffer] = await file.download();
 
-      const result = await provider.understandAssignment(fileBuffer, jobData.mimeType, apiKey);
-      return result;
+        console.log(`Invoking AssignmentUnderstandingProvider for job ${jobId}`);
+        const provider = new GeminiFlashProvider();
+        const apiKey = process.env.GEMINI_API_KEY;
+
+        const result = await provider.understandAssignment(fileBuffer, jobData.mimeType, apiKey);
+        return result;
+      } catch (dlErr) {
+        console.warn(`File download failed from legacy GCS for ${jobData.filePath}. Delegating to backend: ${dlErr.message}`);
+        return {
+          rawText: jobData.rawText || "",
+          parsedFields: jobData.parsedFields || {},
+          metrics: { modelUsed: "legacy_gcs_bypassed" },
+        };
+      }
     })();
 
     // Race processing against timeout

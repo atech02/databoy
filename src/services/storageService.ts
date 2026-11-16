@@ -130,12 +130,13 @@ function uploadBlobViaXhr(params: {
         const etag = xhr.getResponseHeader("ETag")?.replace(/"/g, "") || undefined;
         resolve({ etag });
       } else {
-        reject(new Error(`Direct R2 upload failed with HTTP ${xhr.status}`));
+        const bodySnippet = xhr.responseText ? `: ${xhr.responseText.slice(0, 200)}` : "";
+        reject(new Error(`Direct R2 upload failed with HTTP ${xhr.status} (${xhr.statusText || "Error"})${bodySnippet}`));
       }
     };
 
     xhr.onerror = () => {
-      reject(new Error("Network error during Cloudflare R2 upload (check bucket CORS configuration)"));
+      reject(new Error("Network error during Cloudflare R2 upload (check bucket CORS configuration or network connection)"));
     };
 
     xhr.ontimeout = () => {
