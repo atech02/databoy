@@ -54,8 +54,8 @@ export function getRecommendedR2CorsRules(): R2CorsRule[] {
   return [
     {
       AllowedOrigins: origins,
-      AllowedMethods: ["GET", "PUT", "HEAD", "POST"],
-      AllowedHeaders: ["*"],
+      AllowedMethods: ["GET", "PUT", "HEAD"],
+      AllowedHeaders: ["content-type", "*"],
       ExposeHeaders: ["ETag"],
       MaxAgeSeconds: 3600,
     },
@@ -157,6 +157,9 @@ function getS3Client(config: ValidatedR2Config): S3Client {
     endpoint: config.endpoint,
     // Path-style avoids bucket subdomain SSL wildcard issues across R2 and local S3 test servers
     forcePathStyle: true,
+    // Disable automatic checksum injection (x-amz-checksum-crc32) which breaks R2 presigned PUTs
+    requestChecksumCalculation: "WHEN_REQUIRED" as any,
+    responseChecksumValidation: "WHEN_REQUIRED" as any,
     maxAttempts: 1, // Managed explicitly by executeWithRetry so timeout/metrics stay deterministic
     credentials: {
       accessKeyId: config.accessKeyId,
@@ -287,7 +290,10 @@ export const r2StorageService = {
       ContentType: params.contentType,
     });
 
-    const uploadUrl = await getSignedUrl(client, command, { expiresIn: ttl });
+    const uploadUrl = await getSignedUrl(client, command, {
+      expiresIn: ttl,
+      signableHeaders: new Set(["host", "content-type"]),
+    });
     metrics.presignPutCount += 1;
     logStorageEvent("info", "presign_put_created", {
       storageKey: params.storageKey,
@@ -469,7 +475,10 @@ export const r2StorageService = {
       PartNumber: params.partNumber,
     });
 
-    const uploadUrl = await getSignedUrl(client, command, { expiresIn: ttl });
+    const uploadUrl = await getSignedUrl(client, command, {
+      expiresIn: ttl,
+      signableHeaders: new Set(["host"]),
+    });
     metrics.multipartPartSignCount += 1;
     return { uploadUrl, expiresInSeconds: ttl };
   },

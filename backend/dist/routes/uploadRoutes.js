@@ -521,6 +521,7 @@ export function createUploadRouter(limiters) {
                 },
                 ip: req.ip,
             });
+            console.log(`[UploadRoutes:authorize:success] fileId=${fileId} targetType=${targetType} contentType=${typeCheck.normalizedContentType} sizeBytes=${sizeBytes} signedHeaders=content-type,host expiresIn=${presigned.expiresInSeconds}s`);
             res.status(200).json({
                 authorized: true,
                 provider: "r2",

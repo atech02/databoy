@@ -112,12 +112,29 @@ function uploadBlobViaXhr(params: {
     xhr.open("PUT", params.url, true);
     xhr.timeout = params.timeoutMs ?? 120000;
 
+    let sanitizedUrl = "";
+    try {
+      const u = new URL(params.url);
+      sanitizedUrl = `${u.origin}${u.pathname}`;
+    } catch {
+      sanitizedUrl = "unknown-url";
+    }
+
+    const headersToSend: Record<string, string> = {};
     if (params.headers) {
       for (const [k, v] of Object.entries(params.headers)) {
         if (k.toLowerCase() === "content-length") continue;
+        if (k.toLowerCase() === "authorization") continue;
         xhr.setRequestHeader(k, v);
+        headersToSend[k] = v;
       }
     }
+
+    console.log("[STORAGE_DIAG] Direct R2 PUT starting:", {
+      target: sanitizedUrl,
+      headers: Object.keys(headersToSend),
+      sizeBytes: params.body.size,
+    });
 
     xhr.upload.onprogress = (evt) => {
       if (evt.lengthComputable && params.onProgress) {
@@ -126,6 +143,12 @@ function uploadBlobViaXhr(params: {
     };
 
     xhr.onload = () => {
+      console.log("[STORAGE_DIAG] Direct R2 PUT response:", {
+        status: xhr.status,
+        statusText: xhr.statusText,
+        hasEtag: !!xhr.getResponseHeader("ETag"),
+      });
+
       if (xhr.status >= 200 && xhr.status < 300) {
         const etag = xhr.getResponseHeader("ETag")?.replace(/"/g, "") || undefined;
         resolve({ etag });
@@ -136,10 +159,17 @@ function uploadBlobViaXhr(params: {
     };
 
     xhr.onerror = () => {
-      reject(new Error("Network error during Cloudflare R2 upload (check bucket CORS configuration or network connection)"));
+      console.warn("[STORAGE_DIAG] Direct R2 PUT network error:", {
+        status: xhr.status,
+        readyState: xhr.readyState,
+        target: sanitizedUrl,
+      });
+      const statusText = xhr.status ? ` (HTTP ${xhr.status})` : "";
+      reject(new Error(`Network error during Cloudflare R2 upload${statusText} (check bucket CORS configuration or network connection)`));
     };
 
     xhr.ontimeout = () => {
+      console.warn("[STORAGE_DIAG] Direct R2 PUT timeout:", { target: sanitizedUrl });
       reject(new Error("Upload to Cloudflare R2 timed out. Please retry."));
     };
 
@@ -224,7 +254,7 @@ async function executeUploadFlow(params: {
     await uploadBlobWithRetry({
       url: authRes.uploadUrl,
       body: file,
-      headers: {
+      headers: authRes.headers || {
         "Content-Type": contentType,
       },
       onProgress: (loaded, total) => {

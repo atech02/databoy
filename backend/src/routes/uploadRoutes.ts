@@ -609,6 +609,8 @@ export function createUploadRouter(limiters: RateLimiterBundle): Router {
           ip: req.ip as string | undefined,
         });
 
+        console.log(`[UploadRoutes:authorize:success] fileId=${fileId} targetType=${targetType} contentType=${typeCheck.normalizedContentType} sizeBytes=${sizeBytes} signedHeaders=content-type,host expiresIn=${presigned.expiresInSeconds}s`);
+
         res.status(200).json({
           authorized: true,
           provider: "r2",
