@@ -46,7 +46,7 @@ services:
       - key: R2_REQUIRED
         value: "true"
       - key: R2_REGION
-        value: auto
+        value: us-east-1
       - key: R2_ACCOUNT_ID
         sync: false
       - key: R2_BUCKET_NAME

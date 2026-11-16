@@ -152,8 +152,12 @@ function getS3Client(config: ValidatedR2Config): S3Client {
     return cachedClient;
   }
 
+  // Cloudflare R2 S3 Signature V4 auth layer strictly requires "us-east-1" in the credential scope.
+  // If region is "auto", map to "us-east-1" to ensure presigned PUT URLs pass R2 signature verification.
+  const signingRegion = config.region === "auto" ? "us-east-1" : config.region;
+
   cachedClient = new S3Client({
-    region: config.region,
+    region: signingRegion,
     endpoint: config.endpoint,
     // Path-style avoids bucket subdomain SSL wildcard issues across R2 and local S3 test servers
     forcePathStyle: true,
