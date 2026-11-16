@@ -467,6 +467,17 @@ export const r2StorageService = {
             throw new R2StorageError("R2_CORS_PUT_FAILED", `Failed to set R2 bucket CORS: ${sanitizeStorageErrorMessage(err)}`, 502);
         }
     },
+    async putDirectObject(key, body, contentType = "text/plain") {
+        const config = getValidatedR2ConfigOrThrow();
+        const client = getS3Client(config);
+        const res = await client.send(new PutObjectCommand({
+            Bucket: config.bucketName,
+            Key: key,
+            Body: body,
+            ContentType: contentType,
+        }));
+        return { etag: res.ETag };
+    },
     async ensureDefaultBucketCors() {
         try {
             const current = await r2StorageService.getBucketCors();

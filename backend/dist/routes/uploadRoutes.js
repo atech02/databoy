@@ -1280,6 +1280,26 @@ export function createUploadRouter(limiters) {
             handleStorageRouteError(res, "getBucketCors", err);
         }
     });
+    router.get("/admin/test-direct-put", authMiddleware, requireRole("admin"), async (req, res) => {
+        try {
+            const key = `diagnostics/probe_${Date.now()}.txt`;
+            const directRes = await r2StorageService.putDirectObject(key, "probe-test-from-backend");
+            res.status(200).json({
+                success: true,
+                etag: directRes.etag,
+                key,
+            });
+        }
+        catch (err) {
+            res.status(502).json({
+                success: false,
+                error: err.message,
+                name: err.name,
+                code: err.code || err.Code,
+                statusCode: err.$metadata?.httpStatusCode,
+            });
+        }
+    });
     router.post("/admin/cors/apply", authMiddleware, requireRole("admin"), async (req, res) => {
         try {
             const rules = Array.isArray(req.body?.rules) ? req.body.rules : DEFAULT_R2_CORS_RULES;

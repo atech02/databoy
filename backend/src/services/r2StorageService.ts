@@ -719,6 +719,20 @@ export const r2StorageService = {
     }
   },
 
+  async putDirectObject(key: string, body: Buffer | string, contentType = "text/plain"): Promise<{ etag?: string }> {
+    const config = getValidatedR2ConfigOrThrow();
+    const client = getS3Client(config);
+    const res = await client.send(
+      new PutObjectCommand({
+        Bucket: config.bucketName,
+        Key: key,
+        Body: body,
+        ContentType: contentType,
+      })
+    );
+    return { etag: res.ETag };
+  },
+
   async ensureDefaultBucketCors(): Promise<{ applied: boolean; rules: R2CorsRule[] }> {
     try {
       const current = await r2StorageService.getBucketCors();

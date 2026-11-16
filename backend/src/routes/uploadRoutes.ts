@@ -1503,6 +1503,31 @@ export function createUploadRouter(limiters: RateLimiterBundle): Router {
     }
   );
 
+  router.get(
+    "/admin/test-direct-put",
+    authMiddleware,
+    requireRole("admin"),
+    async (req: Request, res: Response): Promise<void> => {
+      try {
+        const key = `diagnostics/probe_${Date.now()}.txt`;
+        const directRes = await r2StorageService.putDirectObject(key, "probe-test-from-backend");
+        res.status(200).json({
+          success: true,
+          etag: directRes.etag,
+          key,
+        });
+      } catch (err: any) {
+        res.status(502).json({
+          success: false,
+          error: err.message,
+          name: err.name,
+          code: err.code || err.Code,
+          statusCode: err.$metadata?.httpStatusCode,
+        });
+      }
+    }
+  );
+
   router.post(
     "/admin/cors/apply",
     authMiddleware,
