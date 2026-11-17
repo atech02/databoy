@@ -165,6 +165,10 @@ export class AIResponseValidator {
       sanitized.questions = cleanBrief;
     } else {
       sanitized.assignment_brief = null;
+      sanitized.guidelines = null;
+      sanitized.instructions = null;
+      sanitized.questions = null;
+      reviewFields.push("assignment_brief");
     }
 
     // 3. Academic Level (academic_level / academicLevel)

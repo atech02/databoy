@@ -122,7 +122,7 @@ export function parseOCRText(rawText: string): ParsedAssignmentFields {
 
   // 1. Identify Assignment Title
   const explicitTitleMatch =
-    rawText.match(/\b(?:assignment\s+title|coursework\s+title|essay\s+title|topic|title)\s*[:\-]\s*([^\r\n]+)/i);
+    rawText.match(/\b(?:assignment\s+title|coursework\s+title|essay\s+title|topic|title|titre(?:\s+du\s+devoir|\s+du\s+projet)?|título|thema)\s*[:\-]\s*([^\r\n]+)/i);
 
   if (explicitTitleMatch && explicitTitleMatch[1]?.trim().length >= 3) {
     const candidate = explicitTitleMatch[1].trim().replace(/^[#*\s-]+|[#*\s-]+$/g, "");
@@ -144,14 +144,16 @@ export function parseOCRText(rawText: string): ParsedAssignmentFields {
       "identify", "describe", "outline", "summarize", "summarise",
       "consider", "calculate", "solve", "determine", "demonstrate",
       "note", "please", "ensure", "submit", "read", "answer",
-      "student", "candidate", "matric", "semester", "academic year"
+      "student", "candidate", "matric", "semester", "academic year",
+      "just", "prompt", "name", "lecturer", "programme", "program"
     ];
     const questionNumberingRegex = /^(\d+[\.\)]|[a-z][\.\)]|q\d+|task\s*\d+|part\s*[a-z\d]+)/i;
-    const headerRegex = /\b(?:university|faculty|department|school\s+of|college|student\s+name|student\s+id|candidate\s+no|coursework\s+1|assignment\s+\d+)\b/i;
+    const headerRegex = /\b(?:university|faculty|department|school\s+of|college|student\s+name|student\s+id|candidate\s+no|coursework\s+\d+|assignment\s+\d+|programme|program|year\s+\d+|semester\s+\d+|lecturer|examination|course\s+code)\b|^(?:name|student|candidate|id)\s*:/i;
 
     const titleCandidate = lines.find(line => {
       if (line.length < 5 || line.length > 90) return false;
       if (line.endsWith("?")) return false;
+      if (/\.\s+[A-Za-z]/.test(line)) return false; // Multi-sentence prose is not a title
       if (questionNumberingRegex.test(line)) return false;
       if (headerRegex.test(line)) return false;
       const lower = line.toLowerCase();
@@ -187,8 +189,9 @@ export function parseOCRText(rawText: string): ParsedAssignmentFields {
   }
 
   // 3. Identify Word Count
-  const wordCountMatch = rawText.match(/\b(?:word\s*count|word\s*limit|limit)?\s*[:\-]?\s*([0-9,]{3,6})\s*words?\b/i) ||
-                         rawText.match(/\bwords?\s*(?:count|limit)?\s*[:\-]?\s*([0-9,]{3,6})\b/i);
+  const wordCountMatch =
+    rawText.match(/\b(?:word\s*count|word\s*limit|limit|limite)?\s*[:\-]?\s*([0-9,]{3,6})\s*(?:words?|mots?|palabras?|wörter?)\b/i) ||
+    rawText.match(/\b(?:words?|mots?|palabras?)\s*(?:count|limit)?\s*[:\-]?\s*([0-9,]{3,6})\b/i);
   if (wordCountMatch) {
     const val = parseInt(wordCountMatch[1].replace(/,/g, ""), 10);
     if (!isNaN(val) && val >= 100 && val <= 50000) {
@@ -235,8 +238,9 @@ export function parseOCRText(rawText: string): ParsedAssignmentFields {
   // 5. Academic Level
   const academicLevels: Array<[RegExp, string]> = [
     [/\b(?:phd|doctorate|doctoral)\b/i, "phd"],
+    [/\b(?:postgraduate\s+diploma|pgd)\b/i, "diploma"],
     [/\b(?:master['’]?s?|postgraduate|msc|mba|ma|llm)\b/i, "masters"],
-    [/\b(?:undergraduate|bachelor['’]?s?|bsc|ba|degree)\b/i, "degree"],
+    [/\b(?:undergraduate|bachelor['’]?s?|bsc|ba|ll\.?b|b\.?ed|degree)\b/i, "degree"],
     [/\b(?:diploma|higher\s+national\s+diploma|hnd)\b/i, "diploma"],
     [/\b(?:high\s+school|secondary\s+school)\b/i, "high_school"],
   ];

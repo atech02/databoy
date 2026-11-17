@@ -144,6 +144,10 @@ export class AIResponseValidator {
         }
         else {
             sanitized.assignment_brief = null;
+            sanitized.guidelines = null;
+            sanitized.instructions = null;
+            sanitized.questions = null;
+            reviewFields.push("assignment_brief");
         }
         // 3. Academic Level (academic_level / academicLevel)
         const rawLevel = getVal("academic_level", "academicLevel");
