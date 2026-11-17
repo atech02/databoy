@@ -1,3 +1,4 @@
+process.env.NODE_ENV = "test";
 import assert from "node:assert";
 import { test } from "node:test";
 import fs from "node:fs";
@@ -278,7 +279,7 @@ test("Phase 3 - E1: Model-Aware Cache Keys, Schema Invalidation & Tenant Isolati
   AIUsageTracker.resetForTesting();
   AIOrchestrationService.clearCacheForTesting();
 
-  const sampleText = "Case study evaluation of supply chain resilience in post-pandemic commerce.";
+  const sampleText = "Course CS202 Assignment Brief: Case study evaluation of supply chain resilience in post-pandemic commerce.";
 
   // 1. Model-aware cache key uniqueness
   const keyModel1 = AIOrchestrationService.computeCacheKey({
@@ -314,6 +315,7 @@ test("Phase 3 - E1: Model-Aware Cache Keys, Schema Invalidation & Tenant Isolati
     rawText: sampleText,
     userUid: "user_tenant_alpha",
     fileId: "file_secret_123", // fileId must NOT leak to user B
+    targetType: "assignment",
     forceAI: true,
   });
   assert.strictEqual(call1.isCached, false);
@@ -323,6 +325,7 @@ test("Phase 3 - E1: Model-Aware Cache Keys, Schema Invalidation & Tenant Isolati
   const call2 = await AIOrchestrationService.processAssignmentUnderstanding({
     rawText: sampleText,
     userUid: "user_tenant_beta",
+    targetType: "assignment",
   });
   assert.strictEqual(call2.isCached, true);
   assert.strictEqual(call2.strategyUsed, "cache_hit_memory");
@@ -381,10 +384,11 @@ test("Phase 3 - G1: Token Accounting Precision Across All Execution Paths", asyn
   assert.strictEqual(resLocal.tokenUsage, undefined, "Local-only processing must consume 0 tokens");
 
   // Path 2: AI structured call (tokens reported from provider)
-  const sparseText = "Critical essay questions on blockchain consensus algorithms.";
+  const sparseText = "Course CS404 Assignment: Critical questions on blockchain consensus algorithms.";
   const resAI = await AIOrchestrationService.processAssignmentUnderstanding({
     rawText: sparseText,
     userUid: "user_token_2",
+    targetType: "assignment",
     forceAI: true,
   });
   assert.strictEqual(resAI.strategyUsed, "ai_structured");
@@ -394,6 +398,7 @@ test("Phase 3 - G1: Token Accounting Precision Across All Execution Paths", asyn
   const resCache = await AIOrchestrationService.processAssignmentUnderstanding({
     rawText: sparseText,
     userUid: "user_token_3",
+    targetType: "assignment",
   });
   assert.strictEqual(resCache.isCached, true);
   assert.strictEqual(resCache.tokenUsage, undefined, "Cache hits must consume 0 tokens");

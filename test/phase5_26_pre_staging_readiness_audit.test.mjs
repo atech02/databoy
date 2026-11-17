@@ -1,3 +1,4 @@
+process.env.NODE_ENV = "test";
 import assert from "node:assert";
 import { test } from "node:test";
 import fs from "node:fs";
@@ -259,13 +260,14 @@ test("Audit 3.1: Strict Tenant Isolation & Zero-Token Cache Hits", async () => {
   const mockAI = new MockAIProvider("SUCCESS");
   AIOrchestrationService.setProvider(mockAI);
 
-  const sharedBriefText = "Evaluation of corporate sustainability compliance under EU Taxonomy guidelines.";
+  const sharedBriefText = "Course CS301 Syllabus and Assignment Brief: Evaluation of corporate sustainability compliance under EU Taxonomy guidelines.";
 
   // Tenant Alpha submits document
   const callTenantAlpha = await AIOrchestrationService.processAssignmentUnderstanding({
     rawText: sharedBriefText,
     userUid: "tenant_alpha_uid",
     fileId: "confidential_alpha_file_001",
+    targetType: "assignment",
     forceAI: true,
   });
 
@@ -278,6 +280,7 @@ test("Audit 3.1: Strict Tenant Isolation & Zero-Token Cache Hits", async () => {
     rawText: sharedBriefText,
     userUid: "tenant_beta_uid",
     fileId: "confidential_beta_file_002",
+    targetType: "assignment",
   });
 
   // Verify Tenant Isolation Invariants:

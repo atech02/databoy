@@ -342,10 +342,12 @@ export const ocrProcessingService = {
                 mimeType: isImage ? (ext === "png" ? "image/png" : "image/jpeg") : "application/pdf",
                 buffer: fileBuffer,
             } : undefined;
+            const targetType = storageKey ? storageKey.split("/")[0] : "assignment";
             const orchestration = await AIOrchestrationService.processAssignmentUnderstanding({
                 rawText,
                 userUid,
                 fileId,
+                targetType,
                 multimodalBuffer,
             });
             parsedFields = orchestration.parsedFields;

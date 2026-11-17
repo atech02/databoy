@@ -432,10 +432,13 @@ export const ocrProcessingService = {
         buffer: fileBuffer,
       } : undefined;
 
+      const targetType = storageKey ? storageKey.split("/")[0] : "assignment";
+
       const orchestration = await AIOrchestrationService.processAssignmentUnderstanding({
         rawText,
         userUid,
         fileId,
+        targetType,
         multimodalBuffer,
       });
 

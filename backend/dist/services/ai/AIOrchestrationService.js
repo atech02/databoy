@@ -19,8 +19,40 @@ export class AIOrchestrationService {
         return this.activeProvider;
     }
     /**
-     * Computes model-aware, schema-versioned deterministic cache key for document understanding.
-     * Binds:
+     * Classifies document sensitivity to protect student privacy and ensure tenant isolation.
+     * Outputs containing private student data (names, IDs, emails, drafts) are strictly tenant-scoped.
+     * Outputs that are purely generic assignment briefs / public templates are eligible for global caching.
+     */
+    static classifyDocumentSensitivity(rawText, targetType) {
+        const reasons = [];
+        // 1. Non-assignment targets (draft, deliverable, dispute, research) are inherently private student work
+        if (targetType && targetType !== "assignment" && targetType !== "template") {
+            reasons.push(`private_target_type:${targetType}`);
+        }
+        // 2. Email detection
+        if (/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/i.test(rawText)) {
+            reasons.push("contains_email");
+        }
+        // 3. Student/Candidate ID
+        if (/\b(?:student|candidate|reg(?:istration)?|matric(?:ulation)?)\b\s*(?:no|num|number|id|code)?\s*[:#\-]\s*([A-Za-z0-9\-]{4,20})\b/i.test(rawText)) {
+            reasons.push("contains_student_id");
+        }
+        // 4. Personalized salutations or private student names
+        if (/\b(?:dear|hello|hi)\s+[A-Z][a-z]+|\bstudent\s*name\s*[:\-]\s*[A-Z][a-z]+/i.test(rawText)) {
+            reasons.push("contains_personalized_salutation");
+        }
+        // 5. Submission markers
+        if (/\b(?:my\s+submission|draft\s+submission|final\s+deliverable|plagiarism\s+report|turnitin\s+similarity)\b/i.test(rawText)) {
+            reasons.push("contains_private_submission_markers");
+        }
+        return {
+            isSensitive: reasons.length > 0,
+            reasons,
+        };
+    }
+    /**
+     * Computes a deterministic cache key binding:
+     *  - Tenant Scope ('global' for verified tenant-independent, 'tenant:<id>' for sensitive)
      *  - Normalized document text
      *  - Provider ID
      *  - Actual Model Used
@@ -31,7 +63,8 @@ export class AIOrchestrationService {
         const provider = params.providerId || this.activeProvider.id;
         const model = params.modelUsed || "default";
         const schema = params.schemaVersion || ASSIGNMENT_SCHEMA_VERSION;
-        const descriptor = `${normalizedText}::${provider}::${model}::${schema}`;
+        const scope = params.tenantScope || "global";
+        const descriptor = `${scope}::${normalizedText}::${provider}::${model}::${schema}`;
         return crypto.createHash("sha256").update(descriptor).digest("hex");
     }
     /**
@@ -42,6 +75,7 @@ export class AIOrchestrationService {
     }
     /**
      * Orchestrates assignment understanding with:
+     *  - Tenant-hardened cache isolation (sensitive outputs strictly tenant-scoped)
      *  - Model-aware SHA-256 caching (instant return, 0 tokens)
      *  - Strict tenant isolation (never stores fileId/userId in shared cache)
      *  - Per-user rate limiting & quota protection
@@ -50,8 +84,29 @@ export class AIOrchestrationService {
      */
     static async processAssignmentUnderstanding(params) {
         const startTime = Date.now();
-        const { rawText, userUid, forceAI, multimodalBuffer, fileId } = params;
-        const cacheKey = rawText.trim().length > 0 ? this.computeCacheKey({ rawText }) : "";
+        const { rawText, userUid, forceAI, multimodalBuffer, fileId, tenantId, targetType } = params;
+        // 1. Resolve effective tenant identity:
+        // Defaults strictly to trusted server-side userUid (authenticated via Firebase token).
+        // If tenantId is supplied, it must be alphanumeric and sanitized; otherwise falls back to userUid.
+        let effectiveTenant = userUid && typeof userUid === "string" && userUid.trim().length > 0
+            ? userUid.trim()
+            : "unknown_tenant";
+        if (tenantId && typeof tenantId === "string") {
+            const sanitized = tenantId.trim().replace(/[^a-zA-Z0-9_\-]/g, "");
+            if (sanitized.length >= 3 && sanitized.length <= 64) {
+                effectiveTenant = sanitized;
+            }
+        }
+        // 2. Classify document sensitivity and determine cache scope:
+        // MANDATORY INVARIANT: Unknown or uncertain document classifications MUST default to tenant-scoped caching.
+        // Global shared caching is permitted ONLY for verified tenant-independent public templates.
+        const sensitivity = this.classifyDocumentSensitivity(rawText, targetType);
+        const isVerifiedPublicTemplate = (targetType === "assignment" || targetType === "template") &&
+            !sensitivity.isSensitive &&
+            rawText.length >= 50 &&
+            /\b(?:course|module|syllabus|brief|assignment|curriculum|exam)\b/i.test(rawText);
+        const tenantScope = isVerifiedPublicTemplate ? "global" : `tenant:${effectiveTenant}`;
+        const cacheKey = rawText.trim().length > 0 ? this.computeCacheKey({ rawText, tenantScope }) : "";
         // 1. Check In-Memory & Firestore Cache
         if (cacheKey) {
             const memoryHit = this.localMemoryCache.get(cacheKey);
@@ -147,6 +202,7 @@ export class AIOrchestrationService {
                 try {
                     await adminDb.collection("aiResponseCache").doc(cacheKey).set({
                         cacheKey,
+                        tenantScope,
                         parsedFields: understanding.parsedFields,
                         providerId: this.activeProvider.id,
                         modelUsed: understanding.modelUsed || "gemini-2.5-flash",
