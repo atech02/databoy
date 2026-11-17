@@ -123,15 +123,15 @@ export default function UploadProject() {
     setError(null);
     const fileType = file.name.split(".").pop()?.toUpperCase() || "UNKNOWN";
     
-    // Scanned Page Count Protection (Revision 6)
+    // PDF Pre-Check & Limit Safeguards (Digital: 50 pages, Scanned: 5 pages)
     if (fileType === "PDF") {
       try {
         setIsOcrProcessing(true);
-        setOcrLog("Verifying PDF page count...");
+        setOcrLog("Analyzing PDF page count and text layout...");
         setOcrProgress(5);
         
-        // Dynamically load PDF.js from the PDFTextExtractor
-        const { PDFTextExtractor } = await import("@/services/documentProcessor");
+        // Dynamically load PDF.js from DocumentProcessor
+        const { PDFTextExtractor, DIGITAL_PDF_MAX_PAGES } = await import("@/services/documentProcessor");
         const pdfExtractor = new PDFTextExtractor();
         const pdfjs = (window as any).pdfjsLib || (await (pdfExtractor as any).loadPdfJS());
         
@@ -139,14 +139,11 @@ export default function UploadProject() {
         const loadingTask = pdfjs.getDocument({ data: arrayBuffer });
         const pdf = await loadingTask.promise;
         
-        if (pdf.numPages > 25) {
-          setError("This document is too large for automatic extraction. Please upload the assignment brief pages only (maximum 25 pages).");
-          setIsOcrProcessing(false);
-          setBriefFile(null);
-          return;
+        if (pdf.numPages > DIGITAL_PDF_MAX_PAGES) {
+          setError(`This document contains ${pdf.numPages} pages. In-browser extraction is limited to the first ${DIGITAL_PDF_MAX_PAGES} pages to maintain browser performance. For larger files, please upload the assignment brief pages.`);
         }
       } catch (err: any) {
-        console.error("PDF page count check failed:", err);
+        console.warn("PDF pre-flight inspection warning:", err);
       } finally {
         setIsOcrProcessing(false);
       }
@@ -248,10 +245,21 @@ export default function UploadProject() {
       newDiagnostics.method = result.ocrMetrics?.extractionMethod || "Extraction Complete";
       newDiagnostics.charCount = charCount;
       newDiagnostics.preview = result.rawText.substring(0, 500);
+      newDiagnostics.pageCount = result.ocrMetrics?.pageCount || 1;
+      newDiagnostics.processedPages = result.ocrMetrics?.processedPages || 1;
+      newDiagnostics.hasUnprocessedPages = result.ocrMetrics?.hasUnprocessedPages || false;
+      newDiagnostics.unprocessedReason = result.ocrMetrics?.unprocessedReason;
+      newDiagnostics.cacheKey = result.ocrMetrics?.cacheKey || result.cacheKey;
+      newDiagnostics.engineVersion = result.ocrMetrics?.engineVersion || "v1.0";
+      newDiagnostics.warnings = result.ocrMetrics?.warnings || [];
+
+      if (result.ocrMetrics?.hasUnprocessedPages && result.ocrMetrics?.unprocessedReason) {
+        newDiagnostics.ocrErrors.push(`Limit Note: ${result.ocrMetrics.unprocessedReason}`);
+      }
 
       if (charCount > 0) {
         newDiagnostics.ocrStatus = "Success";
-        newDiagnostics.stage = "Text Extracted, Parsing Assignment...";
+        newDiagnostics.stage = result.ocrMetrics?.hasUnprocessedPages ? "Partially Extracted (Limits Applied)" : "Text Extracted, Parsing Assignment...";
       } else {
         newDiagnostics.ocrStatus = "Warning";
         newDiagnostics.stage = "0 Characters Extracted";
@@ -576,46 +584,84 @@ export default function UploadProject() {
                           <span className="font-bold text-foreground">{diagnostics.fileType}</span>
                         </div>
                         <div>
-                          <span className="text-muted-foreground block font-bold uppercase text-[9px]">R2 Upload</span>
+                          <span className="text-muted-foreground block font-bold uppercase text-[9px]">R2 Storage</span>
                           <span className={`font-bold ${diagnostics.uploadStatus === "Success" ? "text-success" : diagnostics.uploadStatus === "Failed" ? "text-danger" : "text-amber-500"}`}>
                             {diagnostics.uploadStatus === "Success" ? "✓ Verified" : diagnostics.uploadStatus === "Failed" ? "✗ Failed" : "⏳ Pending"}
                           </span>
                         </div>
                         <div>
-                          <span className="text-muted-foreground block font-bold uppercase text-[9px]">OCR Extraction</span>
+                          <span className="text-muted-foreground block font-bold uppercase text-[9px]">OCR Pipeline</span>
                           <span className={`font-bold ${diagnostics.ocrStatus === "Success" ? "text-success" : diagnostics.ocrStatus === "Failed" ? "text-danger" : diagnostics.ocrStatus === "Warning" ? "text-amber-500" : "text-amber-500"}`}>
-                            {diagnostics.ocrStatus === "Success" ? "✓ Extracted" : diagnostics.ocrStatus === "Failed" ? "✗ Failed" : diagnostics.ocrStatus === "Warning" ? "⚠️ 0 Chars" : "⏳ Pending"}
+                            {diagnostics.ocrStatus === "Success" ? "✓ Local OCR" : diagnostics.ocrStatus === "Failed" ? "✗ Failed" : diagnostics.ocrStatus === "Warning" ? "⚠️ 0 Chars" : "⏳ Running"}
                           </span>
                         </div>
                         <div>
-                          <span className="text-muted-foreground block font-bold uppercase text-[9px]">Method</span>
-                          <span className="font-bold text-foreground truncate block">{diagnostics.method}</span>
+                          <span className="text-muted-foreground block font-bold uppercase text-[9px]">Cost & Engine</span>
+                          <span className="font-bold text-success truncate block">0.00 USD (Local Free)</span>
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 border-b border-border/20 pb-3">
+                      {/* Unprocessed Pages Safeguard Alert */}
+                      {diagnostics.hasUnprocessedPages && (
+                        <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-700 dark:text-amber-400 text-xs flex flex-col gap-1">
+                          <div className="flex items-center gap-1.5 font-bold">
+                            <span>⚠️</span>
+                            <span>Document Scope Notice (Limits Enforced)</span>
+                          </div>
+                          <p className="text-[10px] leading-relaxed">
+                            {diagnostics.unprocessedReason || `This document has ${diagnostics.pageCount} pages. In-browser processing evaluated ${diagnostics.processedPages} pages. Additional pages require background server processing.`}
+                          </p>
+                        </div>
+                      )}
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 border-b border-border/20 pb-3">
                         <div>
-                          <span className="text-[10px] font-bold text-muted-foreground uppercase block">Step 1: Current Stage</span>
+                          <span className="text-[10px] font-bold text-muted-foreground uppercase block">Stage</span>
                           <span className="text-foreground font-bold">{diagnostics.stage || "Processing"}</span>
                         </div>
                         <div>
-                          <span className="text-[10px] font-bold text-muted-foreground uppercase block">Step 2: Extracted Characters</span>
-                          <span className={`font-bold ${diagnostics.charCount > 0 ? "text-success" : "text-amber-500"}`}>
-                            {diagnostics.charCount} characters {diagnostics.charCount === 0 && !isOcrProcessing ? "(Manual input recommended)" : ""}
+                          <span className="text-[10px] font-bold text-muted-foreground uppercase block">Pages Scanned</span>
+                          <span className="text-foreground font-bold">
+                            {diagnostics.processedPages || 1} of {diagnostics.pageCount || 1} {diagnostics.hasUnprocessedPages ? "(Partial)" : "(Complete)"}
                           </span>
                         </div>
-                        <div className="sm:col-span-2">
-                          <span className="text-[10px] font-bold text-muted-foreground uppercase block">Step 3: UI Field Population Status</span>
+                        <div>
+                          <span className="text-[10px] font-bold text-muted-foreground uppercase block">Extracted Characters</span>
+                          <span className={`font-bold ${diagnostics.charCount > 0 ? "text-success" : "text-amber-500"}`}>
+                            {diagnostics.charCount} chars {diagnostics.charCount === 0 && !isOcrProcessing ? "(Empty)" : ""}
+                          </span>
+                        </div>
+                        <div className="sm:col-span-3">
+                          <span className="text-[10px] font-bold text-muted-foreground uppercase block">Field Population Status</span>
                           <div className="flex flex-wrap gap-3 mt-1 text-[10px]">
                             <span>Brief Applied: <strong className={diagnostics.briefApplied === "Yes" ? "text-success" : "text-amber-500"}>{diagnostics.briefApplied}</strong></span>
                             <span>Title Applied: <strong className={diagnostics.titleApplied === "Yes" ? "text-success" : "text-amber-500"}>{diagnostics.titleApplied}</strong></span>
                             <span>Word Count Applied: <strong className={diagnostics.wordCountApplied === "Yes" ? "text-success" : "text-amber-500"}>{diagnostics.wordCountApplied}</strong></span>
+                            {diagnostics.cacheKey && (
+                              <span className="text-muted-foreground font-mono text-[9px]">Cache Key: {String(diagnostics.cacheKey).slice(0, 24)}...</span>
+                            )}
                           </div>
                         </div>
                       </div>
 
                       <div className="border-b border-border/20 pb-3">
-                        <span className="text-[10px] font-bold text-muted-foreground uppercase block mb-1">Step 4: Extracted Text Preview (First 500 chars)</span>
+                        <div className="flex justify-between items-center mb-1">
+                          <span className="text-[10px] font-bold text-muted-foreground uppercase">Extracted Text Preview</span>
+                          {diagnostics.preview && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (navigator.clipboard) {
+                                  navigator.clipboard.writeText(extractedOcrText || diagnostics.preview);
+                                  alert("Extracted text copied to clipboard!");
+                                }
+                              }}
+                              className="text-[9px] font-bold text-primary hover:underline cursor-pointer"
+                            >
+                              📋 Copy Text
+                            </button>
+                          )}
+                        </div>
                         <pre className="p-2.5 bg-secondary/35 rounded-lg border border-border/30 max-h-[120px] overflow-y-auto whitespace-pre-wrap text-[10px] leading-relaxed text-foreground/80 font-mono">
                           {diagnostics.preview || "(Waiting for text extraction...)"}
                         </pre>

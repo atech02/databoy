@@ -1249,6 +1249,7 @@ export function createUploadRouter(limiters) {
                 contentType: fileRecord.contentType || "application/octet-stream",
                 fileName: fileRecord.fileName || "document",
                 userUid: user.uid,
+                clientRawText: typeof req.body?.clientRawText === "string" ? req.body.clientRawText : undefined,
             });
             res.status(200).json({
                 success: true,

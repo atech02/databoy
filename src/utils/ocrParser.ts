@@ -5,9 +5,12 @@
 export interface ParsedAssignmentFields {
   title?: string;
   guidelines?: string; // Maps to Assignment Brief
+  questions?: string;
+  instructions?: string;
   wordCount?: number;
   referencingStyle?: string;
   deadline?: string; // YYYY-MM-DD formatted
+  academicLevel?: string;
 }
 
 const MONTHS: Record<string, string> = {
@@ -66,12 +69,23 @@ export function parseOCRText(rawText: string): ParsedAssignmentFields {
   const titleKeywords = [
     "due", "deadline", "date", "referencing", "style", "word",
     "count", "page", "instructor", "course", "module", "university",
-    "school", "faculty", "department", "college"
+    "school", "faculty", "department", "college",
+    "assignment", "instructions", "grading", "rubric",
+    "discuss", "analyse", "analyze", "evaluate", "assess", "explain",
+    "examine", "compare", "contrast", "critique", "investigate",
+    "what", "how", "why", "who", "when", "where", "which",
+    "identify", "describe", "outline", "summarize", "summarise",
+    "consider", "calculate", "solve", "determine", "demonstrate",
+    "note", "please", "ensure", "submit", "read", "answer"
   ];
+  const questionNumberingRegex = /^(\d+[\.\)]|[a-z][\.\)]|q\d+|task\s*\d+|part\s*[a-z\d]+)/i;
   const titleCandidate = lines.find(line => {
     if (line.length < 5 || line.length > 80) return false;
+    if (line.endsWith("?")) return false;
+    if (questionNumberingRegex.test(line)) return false;
     const lower = line.toLowerCase();
-    return !titleKeywords.some(kw => lower.includes(kw));
+    const firstWord = lower.split(/[\s:,\.\-]+/)[0];
+    return !titleKeywords.includes(firstWord) && !titleKeywords.some(kw => lower.includes(kw));
   });
   if (titleCandidate) {
     fields.title = titleCandidate.replace(/^[#*\s-]+|[#*\s-]+$/g, "");

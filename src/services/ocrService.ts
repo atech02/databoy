@@ -1,38 +1,50 @@
-import { DocumentProcessor } from "./documentProcessor";
+import { DocumentProcessor, ExtractionResult, ExtractionOptions } from "./documentProcessor";
 import { parseOCRText, ParsedAssignmentFields } from "@/utils/ocrParser";
 import { apiClient } from "@/services/apiClient";
+
+export interface OCRMetrics {
+  fileType: string;
+  extractionMethod: string;
+  status: "Success" | "Failure";
+  durationMs: number;
+  confidenceScore: number;
+  completenessScore?: number;
+  pageCount?: number;
+  processedPages?: number;
+  hasUnprocessedPages?: boolean;
+  unprocessedReason?: string;
+  cacheKey?: string;
+  engineVersion?: string;
+  warnings?: string[];
+  isPartial?: boolean;
+  modelUsed?: string;
+  tokenUsage?: {
+    promptTokens: number;
+    completionTokens: number;
+  };
+  requestCostEstimate?: number;
+  errorReason?: string;
+}
 
 export interface OCRResult {
   rawText: string;
   parsed: ParsedAssignmentFields;
   confidence: "high" | "medium" | "low";
-  ocrMetrics: {
-    fileType: string;
-    extractionMethod: string;
-    status: "Success" | "Failure";
-    durationMs: number;
-    confidenceScore: number;
-    completenessScore?: number;
-    modelUsed?: string;
-    tokenUsage?: {
-      promptTokens: number;
-      completionTokens: number;
-    };
-    requestCostEstimate?: number;
-    errorReason?: string;
-  };
+  ocrMetrics: OCRMetrics;
+  isPartial?: boolean;
+  unprocessedReason?: string;
+  cacheKey?: string;
 }
 
 export const ocrService = {
   /**
-   * Processes an assignment document.
+   * Processes an assignment document with a Local-First, Zero-Cost pipeline.
    * Priority:
-   *  1. Direct client-side parsing for DOCX and Digital PDF (zero latency, 100% fidelity).
-   *  2. Authoritative backend Express OCR endpoint (/api/uploads/:fileId/ocr) for multimodal
-   *     understanding of Images & Scanned PDFs via Cloudflare R2 + Gemini 2.5 Flash.
-   *  3. In-browser client-side optical character recognition fallback (Tesseract.js)
-   *     if backend multimodal processing is unavailable or offline.
-   * Completely replaces the obsolete Firebase Storage Cloud Function trigger.
+   *  1. In-browser client-side extraction (DOCX via JSZip, Digital PDF via PDF.js,
+   *     and Scanned PDFs / Images via enhanced Canvas + Tesseract.js).
+   *     All ordinary character recognition happens locally without invoking Gemini vision tokens.
+   *  2. Last-resort fallback to backend Express OCR (/api/uploads/:fileId/ocr)
+   *     ONLY if local extraction fails completely or is blocked by browser environment.
    */
   async extractText(
     file: File,
@@ -41,131 +53,122 @@ export const ocrService = {
     customerId: string,
     fileUrl: string,
     filePath: string,
-    fileId?: string
+    fileId?: string,
+    options?: ExtractionOptions
   ): Promise<OCRResult> {
     const startTime = performance.now();
     const fileType = file.name.split(".").pop()?.toLowerCase() || "";
-    let extractionMethod = "Unknown";
+    let extractionMethod = "Client Local OCR";
+    let clientResult: ExtractionResult | null = null;
+    let localError: Error | null = null;
 
+    // 1. Stage 1: Execute Local In-Browser OCR & Text Extraction First
     try {
-      // 1. Direct client-side parsing for DOCX
-      if (fileType === "docx" || fileType === "doc") {
-        onProgress("Reading document structure...", 20);
-        const result = await DocumentProcessor.process(file, (p) => {
-          onProgress(p.status, Math.round(20 + p.progressPercent * 0.7));
-        });
-        const parsed = parseOCRText(result.rawText);
-        const durationMs = Math.round(performance.now() - startTime);
-        return {
-          rawText: result.rawText,
-          parsed,
-          confidence: "high",
-          ocrMetrics: {
-            fileType,
-            extractionMethod: result.method,
-            status: "Success",
-            durationMs,
-            confidenceScore: 100,
-          },
-        };
-      }
+      clientResult = await DocumentProcessor.process(
+        file,
+        (p) => {
+          onProgress(p.status, Math.round(15 + p.progressPercent * 0.8));
+        },
+        options
+      );
+    } catch (err: any) {
+      localError = err;
+      console.warn("[ocrService] Local extraction failed or unavailable, checking backend fallback:", err);
+    }
 
-      // 2. Direct client-side parsing for Digital PDF
-      if (fileType === "pdf") {
-        onProgress("Reading PDF layout...", 20);
-        try {
-          const result = await DocumentProcessor.process(file, (p) => {
-            onProgress(p.status, Math.round(20 + p.progressPercent * 0.7));
-          });
-          const parsed = parseOCRText(result.rawText);
-          const durationMs = Math.round(performance.now() - startTime);
-          return {
-            rawText: result.rawText,
-            parsed,
-            confidence: "high",
-            ocrMetrics: {
-              fileType,
-              extractionMethod: result.method,
-              status: "Success",
-              durationMs,
-              confidenceScore: 100,
-            },
-          };
-        } catch (pdfErr: any) {
-          if (pdfErr.message !== "SCANNED_PDF") {
-            throw pdfErr;
-          }
-          extractionMethod = "scanned_pdf";
-        }
-      } else if (["png", "jpg", "jpeg", "webp"].includes(fileType)) {
-        extractionMethod = "image_ocr";
-      } else {
-        throw new Error(`Unsupported document extension: .${fileType}`);
-      }
-
-      // 3. Backend Express OCR endpoint via Cloudflare R2
-      if (fileId) {
-        try {
-          onProgress("Analyzing assignment brief with backend OCR...", 40);
-          const backendRes = await apiClient.post<any>(`/api/uploads/${fileId}/ocr`, {
-            fileId,
-          });
-
-          if (backendRes && backendRes.success && backendRes.rawText && backendRes.rawText.trim().length > 0) {
-            onProgress("Parsing assignment guidelines...", 90);
-            const durationMs = Math.round(performance.now() - startTime);
-            return {
-              rawText: backendRes.rawText,
-              parsed: backendRes.parsedFields || parseOCRText(backendRes.rawText),
-              confidence: backendRes.confidence || "high",
-              ocrMetrics: backendRes.ocrMetrics || {
-                fileType,
-                extractionMethod: backendRes.ocrMetrics?.extractionMethod || "backend_r2_gemini",
-                status: "Success",
-                durationMs,
-                confidenceScore: 90,
-              },
-            };
-          }
-        } catch (backendErr: any) {
-          console.warn("Backend OCR endpoint unavailable or returned an error, falling back to client OCR:", backendErr);
-        }
-      }
-
-      // 4. Client-side OCR fallback for Images & Scanned PDFs
-      onProgress("Running optical character recognition...", 50);
-      const clientResult = await DocumentProcessor.process(file, (p) => {
-        onProgress(p.status, Math.round(50 + p.progressPercent * 0.45));
-      });
+    // 2. Evaluate Local Extraction Quality
+    if (clientResult && clientResult.rawText && clientResult.rawText.trim().length > 0) {
+      onProgress("Structuring assignment brief fields...", 95);
 
       const parsed = parseOCRText(clientResult.rawText);
       const durationMs = Math.round(performance.now() - startTime);
 
+      const completenessScore =
+        (parsed.title ? 20 : 0) +
+        (parsed.guidelines || parsed.questions ? 30 : 0) +
+        (parsed.wordCount ? 20 : 0) +
+        (parsed.referencingStyle ? 15 : 0) +
+        (parsed.deadline ? 15 : 0);
+
+      const confidenceGrade: "high" | "medium" | "low" =
+        clientResult.confidence >= 80 ? "high" : clientResult.confidence >= 50 ? "medium" : "low";
+
+      const ocrMetrics: OCRMetrics = {
+        fileType,
+        extractionMethod: clientResult.method,
+        status: "Success",
+        durationMs,
+        confidenceScore: clientResult.confidence,
+        completenessScore,
+        pageCount: clientResult.pageCount,
+        processedPages: clientResult.processedPages,
+        hasUnprocessedPages: clientResult.hasUnprocessedPages,
+        unprocessedReason: clientResult.unprocessedReason,
+        cacheKey: clientResult.cacheKey,
+        engineVersion: clientResult.engineVersion,
+        warnings: clientResult.warnings,
+        isPartial: clientResult.isPartial,
+        requestCostEstimate: 0, // $0.00 zero cost local execution
+      };
+
+      onProgress("Extraction complete.", 100);
+
       return {
         rawText: clientResult.rawText,
         parsed,
-        confidence: clientResult.confidence > 70 ? "high" : clientResult.confidence > 40 ? "medium" : "low",
-        ocrMetrics: {
-          fileType,
-          extractionMethod: clientResult.method,
-          status: "Success",
-          durationMs,
-          confidenceScore: clientResult.confidence,
-        },
+        confidence: confidenceGrade,
+        ocrMetrics,
+        isPartial: clientResult.isPartial,
+        unprocessedReason: clientResult.unprocessedReason,
+        cacheKey: clientResult.cacheKey,
       };
-    } catch (err: any) {
-      console.error("ocrService.extractText failed:", err);
-      const durationMs = Math.round(performance.now() - startTime);
-      const failedMetrics = {
-        fileType,
-        extractionMethod,
-        status: "Failure" as const,
-        durationMs,
-        confidenceScore: 0,
-        errorReason: err.message || "ocr_extraction_failed",
-      };
-      (err as any).ocrMetrics = failedMetrics;
-      throw err;
     }
+
+    // 3. Fallback: Only invoke backend if local extraction produced 0 characters AND fileId exists
+    if (fileId) {
+      try {
+        onProgress("Local OCR did not detect characters. Invoking backup verification...", 60);
+        const backendRes = await apiClient.post<any>(`/api/uploads/${fileId}/ocr`, {
+          fileId,
+        });
+
+        if (backendRes && backendRes.success && backendRes.rawText && backendRes.rawText.trim().length > 0) {
+          onProgress("Structuring assignment brief...", 95);
+          const durationMs = Math.round(performance.now() - startTime);
+
+          return {
+            rawText: backendRes.rawText,
+            parsed: backendRes.parsedFields || parseOCRText(backendRes.rawText),
+            confidence: backendRes.confidence || "medium",
+            ocrMetrics: backendRes.ocrMetrics || {
+              fileType,
+              extractionMethod: "backend_fallback",
+              status: "Success",
+              durationMs,
+              confidenceScore: 70,
+            },
+          };
+        }
+      } catch (backendErr: any) {
+        console.warn("[ocrService] Backend backup extraction also failed:", backendErr);
+      }
+    }
+
+    // 4. Handle Case where No Readable Text Was Found
+    const durationMs = Math.round(performance.now() - startTime);
+    const failureReason = localError?.message || "No readable text detected in uploaded document.";
+
+    const failedMetrics: OCRMetrics = {
+      fileType,
+      extractionMethod,
+      status: "Failure",
+      durationMs,
+      confidenceScore: 0,
+      errorReason: failureReason,
+    };
+
+    const error = new Error(failureReason);
+    (error as any).ocrMetrics = failedMetrics;
+    throw error;
   },
 };

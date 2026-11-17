@@ -1,5 +1,6 @@
 import { adminDb } from "../config/firebaseAdmin.js";
 import { r2StorageService } from "./r2StorageService.js";
+import { AIOrchestrationService } from "./ai/AIOrchestrationService.js";
 
 export interface ParsedAssignmentFields {
   title?: string;
@@ -90,11 +91,21 @@ export function parseTextToAssignmentFields(rawText: string): ParsedAssignmentFi
     "count", "page", "instructor", "course", "module", "university",
     "school", "faculty", "department", "college",
     "assignment", "instructions", "grading", "rubric",
+    "discuss", "analyse", "analyze", "evaluate", "assess", "explain",
+    "examine", "compare", "contrast", "critique", "investigate",
+    "what", "how", "why", "who", "when", "where", "which",
+    "identify", "describe", "outline", "summarize", "summarise",
+    "consider", "calculate", "solve", "determine", "demonstrate",
+    "note", "please", "ensure", "submit", "read", "answer"
   ];
+  const questionNumberingRegex = /^(\d+[\.\)]|[a-z][\.\)]|q\d+|task\s*\d+|part\s*[a-z\d]+)/i;
   const titleCandidate = lines.find((line) => {
     if (line.length < 5 || line.length > 90) return false;
+    if (line.endsWith("?")) return false;
+    if (questionNumberingRegex.test(line)) return false;
     const lower = line.toLowerCase();
-    return !titleSkipWords.some((kw) => lower.startsWith(kw) || lower.includes("deadline:"));
+    const firstWord = lower.split(/[\s:,\.\-]+/)[0];
+    return !titleSkipWords.includes(firstWord) && !titleSkipWords.some((kw) => lower.startsWith(kw) || lower.includes("deadline:"));
   });
   if (titleCandidate) {
     fields.title = titleCandidate.replace(/^[#*\s-]+|[#*\s-]+$/g, "");
@@ -169,16 +180,43 @@ export function parseTextToAssignmentFields(rawText: string): ParsedAssignmentFi
   }
 
   // 6. Guidelines / Brief Extraction
+  const verbs = [
+    "discuss", "analyse", "analyze", "evaluate", "assess", "explain",
+    "examine", "review", "compare", "contrast", "critique", "investigate",
+    "illustrate", "interpret", "demonstrate", "justify", "describe",
+    "explore", "identify", "recommend"
+  ];
+  const markers = [
+    "question\\s*\\d+",
+    "task\\s*\\d+",
+    "part\\s*[a-z\\d]+",
+    "section\\s*[a-z\\d]+"
+  ];
   const sectionRegex = /\b(?:instructions|assignment\s+tasks|assignment\s+questions?|requirements|brief|prompt|case\s+study)\b/i;
+  const markersRegex = new RegExp(`\\b(?:${markers.join("|")})\\b`, "i");
+  const verbsRegex = new RegExp(`\\b(?:${verbs.join("|")})\\b`, "i");
+
+  let matchIdx = -1;
   const secMatch = rawText.match(sectionRegex);
   if (secMatch && secMatch.index !== undefined) {
-    fields.guidelines = rawText.substring(secMatch.index).trim();
-    fields.instructions = fields.guidelines;
-    fields.questions = fields.guidelines;
+    matchIdx = secMatch.index;
   } else {
-    fields.guidelines = rawText.trim();
-    fields.instructions = rawText.trim();
-    fields.questions = rawText.trim();
+    const mMatch = rawText.match(markersRegex);
+    if (mMatch && mMatch.index !== undefined) {
+      matchIdx = mMatch.index;
+    } else {
+      const vMatch = rawText.match(verbsRegex);
+      if (vMatch && vMatch.index !== undefined) {
+        matchIdx = vMatch.index;
+      }
+    }
+  }
+
+  if (matchIdx !== -1) {
+    const extracted = rawText.substring(matchIdx).trim();
+    fields.guidelines = extracted;
+    fields.instructions = extracted;
+    fields.questions = extracted;
   }
 
   return fields;
@@ -348,72 +386,73 @@ export const ocrProcessingService = {
     contentType: string;
     fileName: string;
     userUid: string;
+    clientRawText?: string;
   }): Promise<OCRProcessingResult> {
-    const { fileId, storageKey, contentType, fileName, userUid } = params;
+    const { fileId, storageKey, contentType, fileName, userUid, clientRawText } = params;
     const startTime = Date.now();
     const ext = fileName.split(".").pop()?.toLowerCase() || "";
     const isImage = ["png", "jpg", "jpeg", "webp"].includes(ext) || contentType.startsWith("image/");
     const isPdf = ext === "pdf" || contentType === "application/pdf";
     const isDocx = ext === "docx" || ext === "doc" || contentType.includes("wordprocessingml");
 
-    // Fetch authoritative buffer directly from R2
-    const fileBuffer = await r2StorageService.getObjectBuffer(storageKey);
-    const geminiApiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "";
+    let rawText = clientRawText?.trim() || "";
+    let fileBuffer: Buffer | null = null;
 
-    let rawText = "";
+    // 1. If client did not provide rawText, fetch buffer from R2
+    if (!rawText && storageKey) {
+      try {
+        fileBuffer = await r2StorageService.getObjectBuffer(storageKey);
+      } catch (r2Err) {
+        console.warn(`[OCR] Failed to fetch R2 buffer for ${storageKey}:`, r2Err);
+      }
+    }
+
+    // 2. Perform local buffer extraction if rawText is still empty
+    if (!rawText && fileBuffer) {
+      if (isPdf) {
+        rawText = extractTextFromPdfBuffer(fileBuffer);
+      } else if (isDocx) {
+        const rawContent = fileBuffer.toString("utf8");
+        const matches = rawContent.match(/<w:t[^>]*>(.*?)<\/w:t>/g) || [];
+        rawText = matches.map((m) => m.replace(/<[^>]+>/g, "")).join(" ");
+      }
+    }
+
+    let extractionMethod = rawText.length > 50 ? (clientRawText ? "client_stage1_ocr" : "backend_direct_stream") : "pending";
     let parsedFields: ParsedAssignmentFields = {};
     let confidence: "high" | "medium" | "low" = "medium";
-    let extractionMethod = "backend_parser";
     let modelUsed: string | undefined;
     let tokenUsage: { promptTokens: number; completionTokens: number } | undefined;
     let requestCostEstimate: number | undefined;
 
-    // 1. If Gemini API key is configured and file is multimodal (Image or PDF)
-    if (geminiApiKey && (isImage || isPdf)) {
-      try {
-        const mime = isImage
-          ? ext === "png"
-            ? "image/png"
-            : ext === "webp"
-            ? "image/webp"
-            : "image/jpeg"
-          : "application/pdf";
+    // 3. Delegate structured understanding to AIOrchestrationService
+    try {
+      const multimodalBuffer = !rawText && fileBuffer && (isImage || isPdf) ? {
+        mimeType: isImage ? (ext === "png" ? "image/png" : "image/jpeg") : "application/pdf",
+        buffer: fileBuffer,
+      } : undefined;
 
-        const geminiRes = await callGeminiMultimodal({
-          fileBuffer,
-          mimeType: mime,
-          apiKey: geminiApiKey,
-        });
+      const orchestration = await AIOrchestrationService.processAssignmentUnderstanding({
+        rawText,
+        userUid,
+        fileId,
+        multimodalBuffer,
+      });
 
-        rawText = geminiRes.rawText;
-        parsedFields = geminiRes.parsedFields;
-        confidence = geminiRes.confidence;
-        extractionMethod = isImage ? "gemini_image" : "gemini_pdf";
-        modelUsed = geminiRes.modelUsed;
-        tokenUsage = geminiRes.tokenUsage;
-        requestCostEstimate = geminiRes.costEstimate;
-      } catch (err: any) {
-        console.warn(`[OCR] Gemini multimodal processing failed, falling back to local extraction: ${err?.message || err}`);
-      }
-    }
-
-    // 2. Fallback text extraction if rawText is still empty
-    if (!rawText.trim()) {
-      if (isPdf) {
-        rawText = extractTextFromPdfBuffer(fileBuffer);
-        extractionMethod = rawText.length > 50 ? "pdf_stream_direct" : "scanned_pdf_pending";
-      } else if (isDocx) {
-        // Simple text recovery from docx xml stream
-        const rawContent = fileBuffer.toString("utf8");
-        const matches = rawContent.match(/<w:t[^>]*>(.*?)<\/w:t>/g) || [];
-        rawText = matches.map((m) => m.replace(/<[^>]+>/g, "")).join(" ");
-        extractionMethod = "docx_direct";
-      } else if (isImage) {
-        extractionMethod = "image_ocr_ready";
-      }
-
+      parsedFields = orchestration.parsedFields;
+      confidence = orchestration.confidence;
+      extractionMethod = orchestration.strategyUsed;
+      modelUsed = orchestration.modelUsed;
+      tokenUsage = orchestration.tokenUsage ? {
+        promptTokens: orchestration.tokenUsage.promptTokens,
+        completionTokens: orchestration.tokenUsage.completionTokens,
+      } : undefined;
+      requestCostEstimate = 0; // Free-tier optimization
+    } catch (aiErr: any) {
+      console.warn("[OCR] AI Orchestration fallback to rule parser:", aiErr);
       parsedFields = parseTextToAssignmentFields(rawText);
       confidence = rawText.length > 100 ? "high" : rawText.length > 20 ? "medium" : "low";
+      extractionMethod = "local_rules_fallback";
     }
 
     const durationMs = Date.now() - startTime;
