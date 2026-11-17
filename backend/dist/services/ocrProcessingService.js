@@ -39,47 +39,110 @@ export function parseDateToYMD(text) {
     }
     return undefined;
 }
+const SUBJECT_KEYWORDS = {
+    computer_science: ["programming", "algorithm", "database", "software", "java", "python", "javascript", "react", "node", "sql", "html", "css", "data structure", "socket server", "networking", "cybersecurity"],
+    mathematics: ["calculus", "linear algebra", "differential", "probability", "statistics", "theorem", "matrix", "integral", "derivative"],
+    engineering: ["mechanical", "electrical", "civil", "thermodynamics", "circuit", "cad", "structural engineering", "signal processing"],
+    physics_chemistry: ["quantum", "chemical", "organic chemistry", "velocity", "thermodynamics", "reaction", "molecular", "spectroscopy"],
+    biological_sciences: ["biology", "biochemistry", "pathology", "anatomy", "genetics", "cellular", "clinical", "health sciences", "pharmacology", "nursing", "medicine"],
+    business_finance: ["accounting", "economics", "econometric", "econometrics", "macroeconomic", "macroeconomics", "microeconomic", "microeconomics", "balance sheet", "finance", "marketing", "management", "inflation", "gdp", "investment", "audit", "banking", "corporate governance"],
+    law: ["jurisprudence", "tort", "contract law", "criminal law", "constitutional", "statute", "court", "legal precedent", "liability", "litigation", "human rights law"],
+    social_sciences: ["psychology", "sociology", "political science", "anthropology", "social policy", "cognitive", "behavioral", "criminology"],
+    humanities_arts: ["literature", "philosophy", "history", "ethics", "poetry", "art history", "linguistics", "theology"],
+};
+export function detectLanguageFromText(text) {
+    if (!text || text.trim().length === 0)
+        return "English";
+    const lower = text.toLowerCase();
+    const frMarkers = [" le ", " la ", " les ", " des ", " est ", " dans ", " pour ", " avec ", " une ", " sur "];
+    const esMarkers = [" el ", " la ", " los ", " las ", " por ", " para ", " con ", " una ", " en ", " del "];
+    const ptMarkers = [" o ", " a ", " os ", " as ", " do ", " da ", " em ", " para ", " com ", " um "];
+    const deMarkers = [" der ", " die ", " das ", " und ", " ist ", " in ", " für ", " mit ", " auf "];
+    const frCount = frMarkers.filter((m) => lower.includes(m)).length;
+    const esCount = esMarkers.filter((m) => lower.includes(m)).length;
+    const ptCount = ptMarkers.filter((m) => lower.includes(m)).length;
+    const deCount = deMarkers.filter((m) => lower.includes(m)).length;
+    if (frCount >= 4)
+        return "French";
+    if (esCount >= 4)
+        return "Spanish";
+    if (ptCount >= 4)
+        return "Portuguese";
+    if (deCount >= 4)
+        return "German";
+    return "English";
+}
 export function parseTextToAssignmentFields(rawText) {
     const fields = {};
     if (!rawText || !rawText.trim())
         return fields;
     const lines = rawText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-    // 1. Title detection
-    const titleSkipWords = [
-        "due", "deadline", "date", "referencing", "style", "word",
-        "count", "page", "instructor", "course", "module", "university",
-        "school", "faculty", "department", "college",
-        "assignment", "instructions", "grading", "rubric",
-        "discuss", "analyse", "analyze", "evaluate", "assess", "explain",
-        "examine", "compare", "contrast", "critique", "investigate",
-        "what", "how", "why", "who", "when", "where", "which",
-        "identify", "describe", "outline", "summarize", "summarise",
-        "consider", "calculate", "solve", "determine", "demonstrate",
-        "note", "please", "ensure", "submit", "read", "answer"
-    ];
-    const questionNumberingRegex = /^(\d+[\.\)]|[a-z][\.\)]|q\d+|task\s*\d+|part\s*[a-z\d]+)/i;
-    const titleCandidate = lines.find((line) => {
-        if (line.length < 5 || line.length > 90)
-            return false;
-        if (line.endsWith("?"))
-            return false;
-        if (questionNumberingRegex.test(line))
-            return false;
-        const lower = line.toLowerCase();
-        const firstWord = lower.split(/[\s:,\.\-]+/)[0];
-        return !titleSkipWords.includes(firstWord) && !titleSkipWords.some((kw) => lower.startsWith(kw) || lower.includes("deadline:"));
-    });
-    if (titleCandidate) {
-        fields.title = titleCandidate.replace(/^[#*\s-]+|[#*\s-]+$/g, "");
+    const detectedLang = detectLanguageFromText(rawText);
+    fields.language = detectedLang;
+    const reviewFields = [];
+    // 1. Title detection with contextual signals
+    const explicitTitleMatch = rawText.match(/\b(?:assignment\s+title|coursework\s+title|essay\s+title|topic|title)\s*[:\-]\s*([^\r\n]+)/i);
+    if (explicitTitleMatch && explicitTitleMatch[1]?.trim().length >= 3) {
+        const candidate = explicitTitleMatch[1].trim().replace(/^[#*\s-]+|[#*\s-]+$/g, "");
+        if (candidate.length <= 250) {
+            fields.assignment_title = candidate;
+            fields.title = candidate;
+        }
+    }
+    if (!fields.title) {
+        const titleSkipWords = [
+            "due", "deadline", "date", "referencing", "style", "word",
+            "count", "page", "instructor", "course", "module", "university",
+            "school", "faculty", "department", "college",
+            "assignment", "instructions", "grading", "rubric",
+            "discuss", "analyse", "analyze", "evaluate", "assess", "explain",
+            "examine", "compare", "contrast", "critique", "investigate",
+            "what", "how", "why", "who", "when", "where", "which",
+            "identify", "describe", "outline", "summarize", "summarise",
+            "consider", "calculate", "solve", "determine", "demonstrate",
+            "note", "please", "ensure", "submit", "read", "answer",
+            "student", "candidate", "matric", "semester", "academic year"
+        ];
+        const questionNumberingRegex = /^(\d+[\.\)]|[a-z][\.\)]|q\d+|task\s*\d+|part\s*[a-z\d]+)/i;
+        const headerRegex = /\b(?:university|faculty|department|school\s+of|college|student\s+name|student\s+id|candidate\s+no|coursework\s+1|assignment\s+\d+)\b/i;
+        const titleCandidate = lines.find((line) => {
+            if (line.length < 5 || line.length > 90)
+                return false;
+            if (line.endsWith("?"))
+                return false;
+            if (questionNumberingRegex.test(line))
+                return false;
+            if (headerRegex.test(line))
+                return false;
+            const lower = line.toLowerCase();
+            const firstWord = lower.split(/[\s:,\.\-]+/)[0];
+            return !titleSkipWords.includes(firstWord) && !titleSkipWords.some((kw) => lower.startsWith(kw) || lower.includes("deadline:"));
+        });
+        if (titleCandidate) {
+            const clean = titleCandidate.replace(/^[#*\s-]+|[#*\s-]+$/g, "");
+            fields.assignment_title = clean;
+            fields.title = clean;
+        }
+        else {
+            fields.assignment_title = null;
+            fields.title = null;
+            reviewFields.push("assignment_title");
+        }
     }
     // 2. Referencing Style
     const refStyles = ["APA", "Harvard", "MLA", "Chicago", "IEEE", "Vancouver"];
     for (const style of refStyles) {
         const regex = new RegExp(`\\b${style}\\b`, "i");
         if (regex.test(rawText)) {
+            fields.referencing_style = style;
             fields.referencingStyle = style;
             break;
         }
+    }
+    if (!fields.referencing_style) {
+        fields.referencing_style = null;
+        fields.referencingStyle = null;
+        reviewFields.push("referencing_style");
     }
     // 3. Word Count
     const wordCountMatch = rawText.match(/\b(?:word\s*count|word\s*limit|limit)?\s*[:\-]?\s*([0-9,]{3,6})\s*words?\b/i) ||
@@ -87,6 +150,7 @@ export function parseTextToAssignmentFields(rawText) {
     if (wordCountMatch) {
         const val = parseInt(wordCountMatch[1].replace(/,/g, ""), 10);
         if (!isNaN(val) && val >= 100 && val <= 50000) {
+            fields.word_count = val;
             fields.wordCount = val;
         }
     }
@@ -95,6 +159,7 @@ export function parseTextToAssignmentFields(rawText) {
     if (deadlineMatch) {
         const parsedDate = parseDateToYMD(deadlineMatch[1]);
         if (parsedDate) {
+            fields.submission_deadline = parsedDate;
             fields.deadline = parsedDate;
         }
     }
@@ -103,19 +168,25 @@ export function parseTextToAssignmentFields(rawText) {
         if (anyDateMatch) {
             const parsedDate = parseDateToYMD(anyDateMatch[0]);
             if (parsedDate) {
+                fields.submission_deadline = parsedDate;
                 fields.deadline = parsedDate;
             }
         }
     }
     if (!fields.deadline) {
-        // ISO date fallback YYYY-MM-DD
         const isoDateMatch = rawText.match(/\b(\d{4}[-/]\d{2}[-/]\d{2})\b/);
         if (isoDateMatch) {
             const parsedDate = parseDateToYMD(isoDateMatch[1]);
             if (parsedDate) {
+                fields.submission_deadline = parsedDate;
                 fields.deadline = parsedDate;
             }
         }
+    }
+    if (!fields.deadline) {
+        fields.submission_deadline = null;
+        fields.deadline = null;
+        reviewFields.push("submission_deadline");
     }
     // 5. Academic Level
     const academicLevels = [
@@ -127,11 +198,57 @@ export function parseTextToAssignmentFields(rawText) {
     ];
     for (const [regex, level] of academicLevels) {
         if (regex.test(rawText)) {
+            fields.academic_level = level;
             fields.academicLevel = level;
             break;
         }
     }
-    // 6. Guidelines / Brief Extraction
+    if (!fields.academic_level) {
+        fields.academic_level = null;
+        fields.academicLevel = null;
+        reviewFields.push("academic_level");
+    }
+    // 6. Subject or Discipline Identification
+    const lowerText = rawText.toLowerCase();
+    let detectedSubject = null;
+    let maxMatches = 0;
+    for (const [subj, keywords] of Object.entries(SUBJECT_KEYWORDS)) {
+        const matchCount = keywords.filter((kw) => lowerText.includes(kw)).length;
+        if (matchCount > maxMatches && matchCount >= 2) {
+            maxMatches = matchCount;
+            detectedSubject = subj;
+        }
+    }
+    if (detectedSubject) {
+        fields.subject_or_discipline = detectedSubject;
+        fields.subject = detectedSubject;
+    }
+    else {
+        fields.subject_or_discipline = null;
+        reviewFields.push("subject_or_discipline");
+    }
+    // 7. Page budget extraction:
+    // Strict check: distinguish "Page 10" from "Write 10 pages" or "10 pages required"
+    const requestedPagesMatch = rawText.match(/\b(?:write|prepare|length|submit|maximum|up\s+to|at\s+least)?\s*([1-9]\d?)\s*pages?\b/i);
+    // Negative check to exclude "page 10" or "pages 10-15"
+    const isPageNumber = /\bpage\s+[1-9]\d?\b/i.test(requestedPagesMatch?.[0] || "");
+    const isPageRange = /\bpages?\s+[1-9]\d?\s*[-–]\s*[1-9]\d?\b/i.test(rawText);
+    if (requestedPagesMatch && !isPageNumber && !isPageRange) {
+        const pagesVal = parseInt(requestedPagesMatch[1], 10);
+        if (!isNaN(pagesVal) && pagesVal >= 1 && pagesVal <= 100) {
+            fields.requested_page_count = pagesVal;
+            fields.pageCount = pagesVal;
+        }
+    }
+    else if (fields.word_count) {
+        fields.requested_page_count = Math.max(1, Math.ceil(fields.word_count / 250));
+        fields.pageCount = fields.requested_page_count;
+    }
+    else {
+        fields.requested_page_count = null;
+        reviewFields.push("requested_page_count");
+    }
+    // 8. Guidelines / Brief Extraction
     const verbs = [
         "discuss", "analyse", "analyze", "evaluate", "assess", "explain",
         "examine", "review", "compare", "contrast", "critique", "investigate",
@@ -166,10 +283,17 @@ export function parseTextToAssignmentFields(rawText) {
     }
     if (matchIdx !== -1) {
         const extracted = rawText.substring(matchIdx).trim();
+        fields.assignment_brief = extracted;
         fields.guidelines = extracted;
         fields.instructions = extracted;
         fields.questions = extracted;
     }
+    else {
+        fields.assignment_brief = null;
+        reviewFields.push("assignment_brief");
+    }
+    fields.fields_requiring_review = reviewFields;
+    fields.extraction_confidence = reviewFields.length <= 1 && fields.title ? "high" : reviewFields.length <= 3 ? "medium" : "low";
     return fields;
 }
 /**
@@ -349,6 +473,7 @@ export const ocrProcessingService = {
                 fileId,
                 targetType,
                 multimodalBuffer,
+                forceAI: true,
             });
             parsedFields = orchestration.parsedFields;
             confidence = orchestration.confidence;

@@ -51,14 +51,32 @@ export interface AIProvider {
 }
 
 export interface ParsedAssignmentFields {
-  title?: string;
-  questions?: string;
-  instructions?: string;
-  guidelines?: string;
-  wordCount?: number;
-  referencingStyle?: string;
-  deadline?: string;
-  academicLevel?: string;
+  // Required Phase 5.33 structured schema fields
+  assignment_title?: string | null;
+  assignment_brief?: string | null;
+  academic_level?: "high_school" | "diploma" | "degree" | "masters" | "phd" | null;
+  subject_or_discipline?: string | null;
+  referencing_style?: string | null;
+  submission_deadline?: string | null;
+  total_page_count?: number | null;
+  requested_page_count?: number | null;
+  word_count?: number | null;
+  assignment_type?: string | null;
+  language?: string | null;
+  extraction_confidence?: "high" | "medium" | "low";
+  fields_requiring_review?: string[];
+
+  // Backward compatibility aliases
+  title?: string | null;
+  questions?: string | null;
+  instructions?: string | null;
+  guidelines?: string | null;
+  wordCount?: number | null;
+  referencingStyle?: string | null;
+  deadline?: string | null;
+  academicLevel?: string | null;
+  subject?: string | null;
+  pageCount?: number | null;
 }
 
 export interface AIUsageRecord {

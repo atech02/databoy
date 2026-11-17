@@ -64,10 +64,17 @@ export default function UploadProject() {
   const [selectedFieldsToApply, setSelectedFieldsToApply] = useState<Record<string, boolean>>({
     title: true,
     guidelines: true,
+    academicLevel: true,
+    subject: true,
     referencingStyle: true,
     deadline: true,
     pageCount: true
   });
+
+  // Extraction Metadata & Review States
+  const [detectedLanguage, setDetectedLanguage] = useState<string>("English");
+  const [fieldsRequiringReview, setFieldsRequiringReview] = useState<string[]>([]);
+  const [autofillSuccessMessage, setAutofillSuccessMessage] = useState<string | null>(null);
 
   // Payment Checkout Modal States
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
@@ -315,6 +322,19 @@ export default function UploadProject() {
         let titleApplied: "Yes" | "No" = "No";
         let wordCountApplied: "Yes" | "No" = "No";
 
+        const assignedTitle = parsed.assignment_title || parsed.title;
+        const assignedBrief = parsed.assignment_brief || parsed.questions || parsed.guidelines || parsed.instructions;
+        const assignedLevel = parsed.academic_level || parsed.academicLevel;
+        const assignedSubject = parsed.subject_or_discipline || parsed.subject;
+        const assignedRef = parsed.referencing_style || parsed.referencingStyle;
+        const assignedDeadline = parsed.submission_deadline || parsed.deadline;
+        const assignedPages = parsed.requested_page_count || parsed.pageCount;
+        const assignedLang = parsed.language || "English";
+        const reviewList = parsed.fields_requiring_review || [];
+
+        setDetectedLanguage(assignedLang);
+        setFieldsRequiringReview(reviewList);
+
         // Check if student has manually edited during processing (Revision 10 Overwrite Protection)
         const hasEdited = hasUserEditedTitle || hasUserEditedGuidelines;
 
@@ -322,27 +342,38 @@ export default function UploadProject() {
           // Keep current form state but trigger suggestion banner/modal
           setShowReviewBanner(true);
         } else {
-          // Auto-populate
-          if (parsed.questions || parsed.guidelines || parsed.instructions) {
-            setGuidelines(parsed.questions || parsed.guidelines || parsed.instructions || "");
+          // Auto-populate all supported fields
+          if (assignedBrief) {
+            setGuidelines(assignedBrief);
             briefApplied = "Yes";
           }
-          if (parsed.title) {
-            setTitle(parsed.title);
+          if (assignedTitle) {
+            setTitle(assignedTitle);
             titleApplied = "Yes";
           }
-          if (parsed.referencingStyle) {
-            setReferencingStyle(parsed.referencingStyle);
+          if (assignedLevel) {
+            setAcademicLevel(assignedLevel);
           }
-          if (parsed.deadline) {
-            setDeadline(parsed.deadline);
+          if (assignedSubject) {
+            setSubject(assignedSubject);
           }
-          if (parsed.wordCount) {
+          if (assignedRef) {
+            setReferencingStyle(assignedRef);
+          }
+          if (assignedDeadline) {
+            setDeadline(assignedDeadline);
+          }
+          if (assignedPages && !hasManuallyAdjustedPages) {
+            const safePages = Math.max(1, Math.min(15, assignedPages));
+            setPageCount(safePages);
             wordCountApplied = "Yes";
-            const estimatedPages = Math.max(1, Math.min(15, Math.ceil(parsed.wordCount / 275)));
-            setPageCount(estimatedPages);
+          } else if (parsed.word_count && !hasManuallyAdjustedPages) {
+            const safePages = Math.max(1, Math.min(15, Math.ceil(parsed.word_count / 250)));
+            setPageCount(safePages);
+            wordCountApplied = "Yes";
           }
           setShowReviewBanner(false);
+          setAutofillSuccessMessage("Assignment details extracted. Please review the highlighted fields.");
         }
 
         newDiagnostics.briefApplied = briefApplied;
@@ -369,6 +400,7 @@ export default function UploadProject() {
       setExtractedOcrText("");
       setOcrConfidence(null);
       setOcrMetrics(null);
+      setAutofillSuccessMessage(null);
     }
   };
 
@@ -378,34 +410,43 @@ export default function UploadProject() {
   const academicPriceZMW = pricingResult.total;
   const breakdown = calculateCommissionBreakdown(academicPriceZMW);
 
-  // Auto-calculate page count based on guidelines word count unless manually overridden
-  useEffect(() => {
-    if (hasManuallyAdjustedPages || !guidelines.trim()) return;
-    const words = guidelines.trim().split(/\s+/).filter(Boolean).length;
-    const estimatedPages = Math.max(1, Math.min(15, Math.ceil(words / 275)));
-    setPageCount(estimatedPages);
-  }, [guidelines, hasManuallyAdjustedPages]);
+  // Note: Page budget is driven authoritatively by document extraction (requested_page_count or explicit word_count)
+  // or student manual adjustment, NEVER by counting the assignment brief prompt's words.
 
   const handleApplySuggestions = (mode: "all" | "selected") => {
     if (!ocrSuggestion) return;
 
     if (mode === "all" || selectedFieldsToApply.title) {
-      if (ocrSuggestion.title) setTitle(ocrSuggestion.title);
+      const t = ocrSuggestion.assignment_title || ocrSuggestion.title;
+      if (t) setTitle(t);
     }
     if (mode === "all" || selectedFieldsToApply.guidelines) {
-      const suggestionBrief = ocrSuggestion.questions || ocrSuggestion.guidelines || ocrSuggestion.instructions;
+      const suggestionBrief = ocrSuggestion.assignment_brief || ocrSuggestion.questions || ocrSuggestion.guidelines || ocrSuggestion.instructions;
       if (suggestionBrief) setGuidelines(suggestionBrief);
     }
+    if (mode === "all" || selectedFieldsToApply.academicLevel) {
+      const lvl = ocrSuggestion.academic_level || ocrSuggestion.academicLevel;
+      if (lvl) setAcademicLevel(lvl);
+    }
+    if (mode === "all" || selectedFieldsToApply.subject) {
+      const s = ocrSuggestion.subject_or_discipline || ocrSuggestion.subject;
+      if (s) setSubject(s);
+    }
     if (mode === "all" || selectedFieldsToApply.referencingStyle) {
-      if (ocrSuggestion.referencingStyle) setReferencingStyle(ocrSuggestion.referencingStyle);
+      const r = ocrSuggestion.referencing_style || ocrSuggestion.referencingStyle;
+      if (r) setReferencingStyle(r);
     }
     if (mode === "all" || selectedFieldsToApply.deadline) {
-      if (ocrSuggestion.deadline) setDeadline(ocrSuggestion.deadline);
+      const d = ocrSuggestion.submission_deadline || ocrSuggestion.deadline;
+      if (d) setDeadline(d);
     }
     if (mode === "all" || selectedFieldsToApply.pageCount) {
-      if (ocrSuggestion.wordCount) {
-        const estimatedPages = Math.max(1, Math.min(15, Math.ceil(ocrSuggestion.wordCount / 275)));
-        setPageCount(estimatedPages);
+      const p = ocrSuggestion.requested_page_count || ocrSuggestion.pageCount;
+      if (p) {
+        setPageCount(Math.max(1, Math.min(15, p)));
+      } else if (ocrSuggestion.word_count || ocrSuggestion.wordCount) {
+        const wc = ocrSuggestion.word_count || ocrSuggestion.wordCount;
+        setPageCount(Math.max(1, Math.min(15, Math.ceil(wc / 250))));
       }
     }
 
@@ -783,18 +824,40 @@ export default function UploadProject() {
                 </div>
               )}
 
-              {/* General Confidence Alert (shown when not in banner mode) */}
+              {/* General Extraction Status Banner */}
               {briefFile && !isOcrProcessing && extractedOcrText && !showReviewBanner && (
-                <div className="flex flex-col gap-3">
-                  {ocrConfidence === "low" ? (
-                    <div className="bg-amber-500/10 border border-amber-500/20 p-3.5 rounded-xl text-xs text-amber-600 flex items-center gap-2">
-                      <span>⚠️</span>
-                      <span className="font-semibold">We found some assignment details, but please review them carefully.</span>
+                <div className="flex flex-col gap-2.5 p-4 rounded-xl border border-border/40 bg-card shadow-sm text-xs">
+                  <div className="flex items-start sm:items-center justify-between gap-2">
+                    <div className="flex items-center gap-2.5">
+                      <span className="text-xl">{fieldsRequiringReview.length > 0 ? "⚠️" : "✨"}</span>
+                      <div>
+                        <span className="font-bold text-foreground block">
+                          Assignment details extracted. Please review the highlighted fields.
+                        </span>
+                        <span className="text-[11px] text-muted-foreground">
+                          Detected Language: <strong className="text-foreground">{detectedLanguage}</strong> • Page Budget: <strong className="text-primary">{pageCount} {pageCount === 1 ? "page" : "pages"}</strong> • Estimated Price: <strong className="text-foreground font-mono">K{academicPriceZMW}</strong>
+                        </span>
+                      </div>
                     </div>
-                  ) : (
-                    <div className="bg-success/5 border border-success/20 p-3.5 rounded-xl text-xs text-success flex items-center gap-2">
-                      <span>✨</span>
-                      <span className="font-semibold">Assignment details successfully extracted. Please review before proceeding.</span>
+                    {fieldsRequiringReview.length > 0 ? (
+                      <Badge variant="warning" className="text-[9px] uppercase font-bold shrink-0">
+                        {fieldsRequiringReview.length} {fieldsRequiringReview.length === 1 ? "Field" : "Fields"} To Confirm
+                      </Badge>
+                    ) : (
+                      <Badge variant="success" className="text-[9px] uppercase font-bold shrink-0">
+                        Autofilled
+                      </Badge>
+                    )}
+                  </div>
+
+                  {fieldsRequiringReview.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-border/20 text-[10px]">
+                      <span className="text-muted-foreground font-bold uppercase">Please confirm:</span>
+                      {fieldsRequiringReview.map((f) => (
+                        <span key={f} className="bg-amber-500/10 text-amber-600 dark:text-amber-400 px-2 py-0.5 rounded font-mono font-bold">
+                          {f.replace(/_/g, " ")}
+                        </span>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -824,7 +887,14 @@ export default function UploadProject() {
               {/* Assignment details inputs */}
               <div className="flex flex-col gap-5 pt-3 border-t border-border/20">
                 <Input
-                  label="Assignment Title"
+                  label={
+                    <span className="flex items-center justify-between w-full">
+                      <span>Assignment Title</span>
+                      {(fieldsRequiringReview.includes("assignment_title") || fieldsRequiringReview.includes("title")) && (
+                        <span className="text-[10px] text-amber-500 font-bold ml-2">⚠️ Needs Review</span>
+                      )}
+                    </span>
+                  }
                   placeholder="e.g. Econometrics Balance Sheet Study or Java Socket Server"
                   value={title}
                   onChange={(e) => {
@@ -836,14 +906,28 @@ export default function UploadProject() {
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <Select
-                    label="Academic Level"
+                    label={
+                      <span className="flex items-center justify-between w-full">
+                        <span>Academic Level</span>
+                        {(fieldsRequiringReview.includes("academic_level") || fieldsRequiringReview.includes("academicLevel")) && (
+                          <span className="text-[10px] text-amber-500 font-bold ml-2">⚠️ Confirm Level</span>
+                        )}
+                      </span>
+                    }
                     options={ACADEMIC_LEVELS}
                     value={academicLevel}
                     onChange={(e) => setAcademicLevel(e.target.value)}
                   />
 
                   <Select
-                    label="Subject / Discipline"
+                    label={
+                      <span className="flex items-center justify-between w-full">
+                        <span>Subject / Discipline</span>
+                        {(fieldsRequiringReview.includes("subject_or_discipline") || fieldsRequiringReview.includes("subject")) && (
+                          <span className="text-[10px] text-amber-500 font-bold ml-2">⚠️ Confirm Subject</span>
+                        )}
+                      </span>
+                    }
                     options={[
                       { value: "", label: "Select subject..." },
                       ...SUBJECT_EXPERTISE,
@@ -855,7 +939,14 @@ export default function UploadProject() {
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <Select
-                     label="Referencing Style"
+                     label={
+                       <span className="flex items-center justify-between w-full">
+                         <span>Referencing Style</span>
+                         {(fieldsRequiringReview.includes("referencing_style") || fieldsRequiringReview.includes("referencingStyle")) && (
+                           <span className="text-[10px] text-amber-500 font-bold ml-2">⚠️ Confirm Style</span>
+                         )}
+                       </span>
+                     }
                      options={[
                        { value: "APA", label: "APA 7th Edition" },
                        { value: "Harvard", label: "Harvard Reference" },
@@ -870,7 +961,14 @@ export default function UploadProject() {
                   />
 
                   <Input
-                    label="Submission Target Deadline"
+                    label={
+                      <span className="flex items-center justify-between w-full">
+                        <span>Submission Target Deadline</span>
+                        {(fieldsRequiringReview.includes("submission_deadline") || fieldsRequiringReview.includes("deadline")) && (
+                          <span className="text-[10px] text-amber-500 font-bold ml-2">⚠️ Confirm Deadline</span>
+                        )}
+                      </span>
+                    }
                     type="date"
                     value={deadline}
                     onChange={(e) => setDeadline(e.target.value)}
@@ -881,7 +979,12 @@ export default function UploadProject() {
                 {/* Page count slider & Pricing visual engine */}
                 <div className="flex flex-col gap-3.5 bg-card/65 p-4 rounded-xl border border-border/40 shadow-sm">
                   <div className="flex justify-between items-center">
-                    <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Select Page Budget</span>
+                    <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                      <span>Select Page Budget</span>
+                      {(fieldsRequiringReview.includes("requested_page_count") || fieldsRequiringReview.includes("pageCount")) && (
+                        <span className="text-[10px] text-amber-500 font-bold">⚠️ Confirm Length</span>
+                      )}
+                    </span>
                     <span className="text-sm font-black text-primary bg-primary/10 px-2.5 py-1 rounded-lg">
                       {pageCount} {pageCount === 1 ? "Page" : "Pages"}
                     </span>
@@ -1068,6 +1171,64 @@ export default function UploadProject() {
             )}
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* Field: Academic Level */}
+              {(ocrSuggestion?.academic_level || ocrSuggestion?.academicLevel) && (
+                <div className="border border-border/20 rounded-xl p-3 bg-secondary/10 flex flex-col gap-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs font-bold text-foreground font-semibold">Academic Level</span>
+                    <label className="flex items-center gap-1.5 text-[10px] font-bold text-muted-foreground cursor-pointer select-none">
+                      <input 
+                        type="checkbox" 
+                        checked={selectedFieldsToApply.academicLevel} 
+                        onChange={(e) => setSelectedFieldsToApply(prev => ({ ...prev, academicLevel: e.target.checked }))}
+                        className="accent-primary"
+                      />
+                      Apply
+                    </label>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="p-2 rounded bg-card border border-border/30 text-center">
+                      <span className="text-[9px] text-muted-foreground block">Current:</span>
+                      <span className="font-medium">{academicLevel || "(Empty)"}</span>
+                    </div>
+                    <div className="p-2 rounded bg-primary/5 border border-primary/20 text-center">
+                      <span className="text-[9px] text-primary block font-bold">Suggested:</span>
+                      <span className="font-bold text-foreground">{ocrSuggestion.academic_level || ocrSuggestion.academicLevel}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Field: Subject / Discipline */}
+              {(ocrSuggestion?.subject_or_discipline || ocrSuggestion?.subject) && (
+                <div className="border border-border/20 rounded-xl p-3 bg-secondary/10 flex flex-col gap-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs font-bold text-foreground font-semibold">Subject / Discipline</span>
+                    <label className="flex items-center gap-1.5 text-[10px] font-bold text-muted-foreground cursor-pointer select-none">
+                      <input 
+                        type="checkbox" 
+                        checked={selectedFieldsToApply.subject} 
+                        onChange={(e) => setSelectedFieldsToApply(prev => ({ ...prev, subject: e.target.checked }))}
+                        className="accent-primary"
+                      />
+                      Apply
+                    </label>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="p-2 rounded bg-card border border-border/30 text-center">
+                      <span className="text-[9px] text-muted-foreground block">Current:</span>
+                      <span className="font-medium">{subject || "(Empty)"}</span>
+                    </div>
+                    <div className="p-2 rounded bg-primary/5 border border-primary/20 text-center">
+                      <span className="text-[9px] text-primary block font-bold">Suggested:</span>
+                      <span className="font-bold text-foreground">
+                        {SUBJECT_EXPERTISE.find(s => s.value === (ocrSuggestion.subject_or_discipline || ocrSuggestion.subject))?.label || (ocrSuggestion.subject_or_discipline || ocrSuggestion.subject)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Field: Referencing Style */}
               {ocrSuggestion?.referencingStyle && (
                 <div className="border border-border/20 rounded-xl p-3 bg-secondary/10 flex flex-col gap-2">

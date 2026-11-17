@@ -413,8 +413,42 @@ export function calculateStopwordRatio(text: string): { totalWords: number; matc
 
 export function detectGibberishText(text: string): boolean {
   if (!text || text.trim().length < 20) return true;
+
+  // 1. High-ratio non-printable / symbol check: true gibberish / OCR noise
+  const lettersAndDigits = text.match(/[\p{L}\p{N}]/gu) || [];
+  if (lettersAndDigits.length / text.length < 0.35) return true;
+
+  // 2. Coherent English stopword ratio
   const { totalWords, ratio } = calculateStopwordRatio(text);
-  if (totalWords < 5) return true;
+  if (totalWords >= 5 && ratio >= 0.45) return false;
+
+  // 3. Multi-language coherent phrase markers (French, Spanish, German, Portuguese)
+  const lower = text.toLowerCase();
+  const foreignMarkers = [
+    " le ", " la ", " les ", " des ", " est ", " dans ", " pour ", " avec ", " une ", " sur ", // French
+    " el ", " la ", " los ", " las ", " por ", " para ", " con ", " una ", " en ", " del ", // Spanish
+    " der ", " die ", " das ", " und ", " ist ", " in ", " für ", " mit ", " auf ", // German
+    " o ", " a ", " os ", " as ", " do ", " da ", " em ", " para ", " com ", " um ", // Portuguese
+  ];
+  if (foreignMarkers.filter((m) => lower.includes(m)).length >= 2) {
+    return false;
+  }
+
+  // 4. Check for coherent words with standard vowel-consonant structure vs random keyboard smash
+  const words = text.trim().split(/\s+/).filter((w) => w.length > 2);
+  if (words.length >= 5) {
+    // Check if words have normal vowels and printable letters
+    const validWordCount = words.filter((w) => /[aeiouy\p{L}]/iu.test(w) && !/[^a-zA-Z0-9\p{L}\p{N}\-']/u.test(w)).length;
+    const validWordRatio = validWordCount / words.length;
+    // Check symbol entropy (e.g., %%% &&*! $$$)
+    const symbolCount = (text.match(/[^a-zA-Z0-9\s\p{L}\p{N}.,;:?!()"'\-]/gu) || []).length;
+    const symbolRatio = symbolCount / text.length;
+
+    if (validWordRatio >= 0.75 && symbolRatio < 0.15) {
+      return false;
+    }
+  }
+
   return ratio < 0.45;
 }
 

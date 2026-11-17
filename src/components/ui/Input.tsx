@@ -1,7 +1,7 @@
 import React from "react";
 
 export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
-  label?: string;
+  label?: React.ReactNode;
   error?: string;
   helperText?: string;
 }
@@ -39,7 +39,7 @@ export const Input: React.FC<InputProps> = ({
 };
 
 export interface TextareaProps extends React.TextareaHTMLAttributes<HTMLTextAreaElement> {
-  label?: string;
+  label?: React.ReactNode;
   error?: string;
   helperText?: string;
 }
@@ -75,7 +75,7 @@ export const Textarea: React.FC<TextareaProps> = ({
 };
 
 export interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElement> {
-  label?: string;
+  label?: React.ReactNode;
   error?: string;
   helperText?: string;
   options: { value: string; label: string }[];

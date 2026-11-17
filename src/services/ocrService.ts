@@ -78,24 +78,45 @@ export const ocrService = {
 
     // 2. Evaluate Local Extraction Quality
     if (clientResult && clientResult.rawText && clientResult.rawText.trim().length > 0) {
-      onProgress("Structuring assignment brief fields...", 95);
+      onProgress("Structuring assignment brief fields...", 90);
 
-      const parsed = parseOCRText(clientResult.rawText);
+      let parsed = parseOCRText(clientResult.rawText);
+      let effectiveMethod = clientResult.method;
+
+      // Enhance with server-side Gemini 2.5 Flash understanding if fileId is available
+      if (fileId) {
+        try {
+          onProgress("Interpreting assignment details with Gemini AI...", 95);
+          const backendRes = await apiClient.post<any>(`/api/uploads/${fileId}/ocr`, {
+            fileId,
+            clientRawText: clientResult.rawText,
+          });
+
+          if (backendRes && backendRes.success && backendRes.parsedFields) {
+            parsed = backendRes.parsedFields;
+            effectiveMethod = `${clientResult.method} + Gemini 2.5 Flash`;
+          }
+        } catch (aiErr) {
+          console.warn("[ocrService] Server AI structuring failed, using local rule parser:", aiErr);
+        }
+      }
+
       const durationMs = Math.round(performance.now() - startTime);
 
       const completenessScore =
-        (parsed.title ? 20 : 0) +
-        (parsed.guidelines || parsed.questions ? 30 : 0) +
-        (parsed.wordCount ? 20 : 0) +
-        (parsed.referencingStyle ? 15 : 0) +
-        (parsed.deadline ? 15 : 0);
+        (parsed.title || parsed.assignment_title ? 20 : 0) +
+        (parsed.guidelines || parsed.questions || parsed.assignment_brief ? 30 : 0) +
+        (parsed.wordCount || parsed.word_count ? 20 : 0) +
+        (parsed.referencingStyle || parsed.referencing_style ? 15 : 0) +
+        (parsed.deadline || parsed.submission_deadline ? 15 : 0);
 
       const confidenceGrade: "high" | "medium" | "low" =
-        clientResult.confidence >= 80 ? "high" : clientResult.confidence >= 50 ? "medium" : "low";
+        parsed.extraction_confidence ||
+        (clientResult.confidence >= 80 ? "high" : clientResult.confidence >= 50 ? "medium" : "low");
 
       const ocrMetrics: OCRMetrics = {
         fileType,
-        extractionMethod: clientResult.method,
+        extractionMethod: effectiveMethod,
         status: "Success",
         durationMs,
         confidenceScore: clientResult.confidence,
@@ -108,7 +129,7 @@ export const ocrService = {
         engineVersion: clientResult.engineVersion,
         warnings: clientResult.warnings,
         isPartial: clientResult.isPartial,
-        requestCostEstimate: 0, // $0.00 zero cost local execution
+        requestCostEstimate: 0,
       };
 
       onProgress("Extraction complete.", 100);
