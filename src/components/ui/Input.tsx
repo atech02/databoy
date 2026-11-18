@@ -27,7 +27,7 @@ export const Input: React.FC<InputProps> = ({
       <input
         type={type}
         id={inputId}
-        className={`w-full px-3.5 py-2.5 text-sm bg-background border rounded-lg transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/60 hover:border-muted-foreground/30 placeholder:text-muted-foreground/50 ${
+        className={`w-full min-h-[44px] px-3.5 py-2.5 text-sm bg-background border rounded-lg transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/60 hover:border-muted-foreground/30 placeholder:text-muted-foreground/50 ${
           error ? "border-destructive focus:ring-destructive/30" : "border-border/50"
         } ${className}`}
         {...props}
@@ -102,7 +102,7 @@ export const Select: React.FC<SelectProps> = ({
       <div className="relative">
         <select
           id={selectId}
-          className={`w-full px-3.5 py-2.5 text-sm bg-background border rounded-lg appearance-none transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/60 hover:border-muted-foreground/30 cursor-pointer ${
+          className={`w-full min-h-[44px] px-3.5 py-2.5 text-sm bg-background border rounded-lg appearance-none transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/60 hover:border-muted-foreground/30 cursor-pointer ${
             error ? "border-destructive focus:ring-destructive/30" : "border-border/50"
           } ${className}`}
           {...props}

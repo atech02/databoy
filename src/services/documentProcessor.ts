@@ -8,7 +8,7 @@ export const SCANNED_PDF_MAX_PAGES = 5;
 export const TESSERACT_VERSION = "5.1.0";
 export const PDFJS_VERSION = "3.11.174";
 export const JSZIP_VERSION = "3.10.1";
-export const OCR_DEFAULT_LANG = "eng";
+export const OCR_DEFAULT_LANG = "eng+fra";
 
 // Canonical Preprocessing Configuration
 export const PREPROCESSING_CONFIG = {
@@ -150,13 +150,171 @@ export function cleanupCanvas(canvas: HTMLCanvasElement | null): void {
 }
 
 /**
+ * Detects whether image content is sideways (90 or 270 degrees rotated)
+ * by analyzing row-wise vs column-wise variance of dark pixel projections.
+ * In horizontal text, row variance is high (lines of text alternate with white margins).
+ * In rotated vertical text, column variance is higher than row variance.
+ */
+export function correctCanvasOrientation(canvas: HTMLCanvasElement): HTMLCanvasElement {
+  if (typeof document === "undefined") return canvas;
+  const ctx = canvas.getContext("2d");
+  if (!ctx || canvas.width === 0 || canvas.height === 0) return canvas;
+
+  try {
+    const w = canvas.width;
+    const h = canvas.height;
+    if (w < 100 || h < 100) return canvas;
+
+    const sampleW = Math.min(w, 400);
+    const sampleH = Math.min(h, 400);
+    const startX = Math.floor((w - sampleW) / 2);
+    const startY = Math.floor((h - sampleH) / 2);
+
+    const imgData = ctx.getImageData(startX, startY, sampleW, sampleH);
+    const data = imgData.data;
+
+    const rowSums = new Float64Array(sampleH);
+    const colSums = new Float64Array(sampleW);
+
+    for (let y = 0; y < sampleH; y++) {
+      for (let x = 0; x < sampleW; x++) {
+        const idx = (y * sampleW + x) * 4;
+        const gray = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+        const dark = 255 - gray;
+        rowSums[y] += dark;
+        colSums[x] += dark;
+      }
+    }
+
+    const calcVar = (arr: Float64Array) => {
+      let sum = 0;
+      for (let i = 0; i < arr.length; i++) sum += arr[i];
+      const mean = sum / arr.length;
+      let v = 0;
+      for (let i = 0; i < arr.length; i++) {
+        const diff = arr[i] - mean;
+        v += diff * diff;
+      }
+      return v / arr.length;
+    };
+
+    const rowVar = calcVar(rowSums);
+    const colVar = calcVar(colSums);
+
+    // If column variance is significantly higher than row variance (> 1.35x),
+    // text lines run vertically, meaning the document is sideways.
+    if (colVar > rowVar * 1.35 && colVar > 1000) {
+      const rotated = document.createElement("canvas");
+      rotated.width = h;
+      rotated.height = w;
+      const rotCtx = rotated.getContext("2d");
+      if (rotCtx) {
+        rotCtx.translate(h / 2, w / 2);
+        rotCtx.rotate((90 * Math.PI) / 180);
+        rotCtx.drawImage(canvas, -w / 2, -h / 2);
+        return rotated;
+      }
+    }
+  } catch (err) {
+    console.warn("[DocumentProcessor] Orientation check warning:", err);
+  }
+
+  return canvas;
+}
+
+/**
+ * Deskews canvas by small angles (-4° to +4°) by finding the rotation angle
+ * that maximizes horizontal projection profile sharpness.
+ */
+export function deskewCanvas(canvas: HTMLCanvasElement): HTMLCanvasElement {
+  if (typeof document === "undefined") return canvas;
+  const ctx = canvas.getContext("2d");
+  if (!ctx || canvas.width === 0 || canvas.height === 0) return canvas;
+
+  try {
+    const w = canvas.width;
+    const h = canvas.height;
+    if (w < 200 || h < 200) return canvas;
+
+    const sampleH = Math.min(h, 240);
+    const sampleW = Math.min(w, 240);
+    const startX = Math.floor((w - sampleW) / 2);
+    const startY = Math.floor((h - sampleH) / 2);
+
+    const testAngles = [-4, -2, 2, 4];
+    let bestAngle = 0;
+
+    const baseData = ctx.getImageData(startX, startY, sampleW, sampleH).data;
+    const baseRows = new Float64Array(sampleH);
+    for (let y = 0; y < sampleH; y++) {
+      for (let x = 0; x < sampleW; x++) {
+        const idx = (y * sampleW + x) * 4;
+        baseRows[y] += 255 - (0.299 * baseData[idx] + 0.587 * baseData[idx + 1] + 0.114 * baseData[idx + 2]);
+      }
+    }
+    let sum0 = 0;
+    for (let y = 0; y < sampleH; y++) sum0 += baseRows[y];
+    const mean0 = sum0 / sampleH;
+    let var0 = 0;
+    for (let y = 0; y < sampleH; y++) var0 += (baseRows[y] - mean0) ** 2;
+    let maxVariance = var0;
+
+    for (const deg of testAngles) {
+      const rad = (deg * Math.PI) / 180;
+      const cos = Math.cos(rad);
+      const sin = Math.sin(rad);
+      const testRows = new Float64Array(sampleH);
+      for (let y = 0; y < sampleH; y++) {
+        for (let x = 0; x < sampleW; x++) {
+          const origX = Math.floor(startX + (x - sampleW / 2) * cos - (y - sampleH / 2) * sin + sampleW / 2);
+          const origY = Math.floor(startY + (x - sampleW / 2) * sin + (y - sampleH / 2) * cos + sampleH / 2);
+          if (origX >= 0 && origX < w && origY >= 0 && origY < h) {
+            const idx = (origY * w + origX) * 4;
+            testRows[y] += 255 - (0.299 * baseData[idx] + 0.587 * baseData[idx + 1] + 0.114 * baseData[idx + 2]);
+          }
+        }
+      }
+      let sumA = 0;
+      for (let y = 0; y < sampleH; y++) sumA += testRows[y];
+      const meanA = sumA / sampleH;
+      let varA = 0;
+      for (let y = 0; y < sampleH; y++) varA += (testRows[y] - meanA) ** 2;
+
+      if (varA > maxVariance * 1.15) {
+        maxVariance = varA;
+        bestAngle = deg;
+      }
+    }
+
+    if (bestAngle !== 0) {
+      const deskewed = document.createElement("canvas");
+      deskewed.width = w;
+      deskewed.height = h;
+      const dCtx = deskewed.getContext("2d");
+      if (dCtx) {
+        dCtx.translate(w / 2, h / 2);
+        dCtx.rotate((bestAngle * Math.PI) / 180);
+        dCtx.drawImage(canvas, -w / 2, -h / 2);
+        return deskewed;
+      }
+    }
+  } catch (err) {
+    console.warn("[DocumentProcessor] Deskew warning:", err);
+  }
+
+  return canvas;
+}
+
+/**
  * Preprocesses canvas client-side:
  * 1. Upscales small images (minimum 800px width).
  * 2. Blends alpha/transparency over solid white.
  * 3. Converts to high-contrast grayscale.
- * 4. Applies binary thresholding to clarify text strokes for Tesseract.
+ * 4. Applies noise reduction and soft adaptive thresholding, preserving anti-aliased font stroke margins.
+ * 5. Corrects orientation and deskews document alignment.
  */
 export function preprocessCanvas(canvas: HTMLCanvasElement): HTMLCanvasElement {
+  if (typeof document === "undefined") return canvas;
   const ctx = canvas.getContext("2d");
   if (!ctx) return canvas;
 
@@ -213,9 +371,19 @@ export function preprocessCanvas(canvas: HTMLCanvasElement): HTMLCanvasElement {
 
       // Contrast scaling
       gray = factor * (gray - 128) + 128;
+      gray = Math.max(0, Math.min(255, gray));
 
-      // Binary thresholding
-      const finalColor = gray > threshold ? 255 : 0;
+      // Adaptive thresholding: Preserve anti-aliased font stroke margins
+      // (avoiding broken letter fragments that cause OCR foreign-glyph hallucinations)
+      let finalColor: number;
+      if (gray < threshold - 30) {
+        finalColor = 0; // Solid ink
+      } else if (gray > threshold + 30) {
+        finalColor = 255; // Solid paper
+      } else {
+        // Smooth transition zone for Tesseract line gradient detection
+        finalColor = Math.round((gray - (threshold - 30)) * (255 / 60));
+      }
 
       data[i] = finalColor;     // R
       data[i + 1] = finalColor; // G
@@ -224,6 +392,11 @@ export function preprocessCanvas(canvas: HTMLCanvasElement): HTMLCanvasElement {
     }
 
     finalCtx.putImageData(imgData, 0, 0);
+
+    // 5. Correct sideways orientation and document skew
+    const oriented = correctCanvasOrientation(targetCanvas);
+    const deskewed = deskewCanvas(oriented);
+    return deskewed;
   } catch (err) {
     console.warn("[DocumentProcessor] Canvas preprocessing warning, using raw canvas:", err);
   }
@@ -419,7 +592,7 @@ export function detectGibberishText(text: string): boolean {
   if (lettersAndDigits.length / text.length < 0.35) return true;
 
   // 2. Coherent English stopword ratio
-  const { totalWords, ratio } = calculateStopwordRatio(text);
+  const { totalWords, matchCount, ratio } = calculateStopwordRatio(text);
   if (totalWords >= 5 && ratio >= 0.45) return false;
 
   // 3. Multi-language coherent phrase markers (French, Spanish, German, Portuguese)
@@ -429,22 +602,24 @@ export function detectGibberishText(text: string): boolean {
     " el ", " la ", " los ", " las ", " por ", " para ", " con ", " una ", " en ", " del ", // Spanish
     " der ", " die ", " das ", " und ", " ist ", " in ", " für ", " mit ", " auf ", // German
     " o ", " a ", " os ", " as ", " do ", " da ", " em ", " para ", " com ", " um ", // Portuguese
+    " devoir ", " cours ", " projet ", " travail ", " note ", " etudiant ", " etudiante " // French academic
   ];
   if (foreignMarkers.filter((m) => lower.includes(m)).length >= 2) {
     return false;
   }
 
-  // 4. Check for coherent words with standard vowel-consonant structure vs random keyboard smash
-  const words = text.trim().split(/\s+/).filter((w) => w.length > 2);
-  if (words.length >= 5) {
-    // Check if words have normal vowels and printable letters
-    const validWordCount = words.filter((w) => /[aeiouy\p{L}]/iu.test(w) && !/[^a-zA-Z0-9\p{L}\p{N}\-']/u.test(w)).length;
-    const validWordRatio = validWordCount / words.length;
-    // Check symbol entropy (e.g., %%% &&*! $$$)
+  // 4. Check for coherent words with standard vowel-consonant structure vs random keyboard smash / OCR noise
+  // A genuine word is strictly alphabetic and contains at least one vowel
+  const tokens = text.trim().split(/\s+/).filter((w) => w.length >= 2);
+  if (tokens.length >= 4) {
+    const validWordCount = tokens.filter((w) => /^[a-zA-Z\p{L}\-']+$/u.test(w) && /[aeiouyàâäéèêëîïôöùûüç]/iu.test(w)).length;
+    const validWordRatio = validWordCount / tokens.length;
+
     const symbolCount = (text.match(/[^a-zA-Z0-9\s\p{L}\p{N}.,;:?!()"'\-]/gu) || []).length;
     const symbolRatio = symbolCount / text.length;
 
-    if (validWordRatio >= 0.75 && symbolRatio < 0.15) {
+    // Academic text with domain jargon has high valid word ratio and low symbol ratio, plus some academic matches
+    if (validWordRatio >= 0.75 && symbolRatio < 0.12 && (matchCount >= 2 || ratio >= 0.20)) {
       return false;
     }
   }

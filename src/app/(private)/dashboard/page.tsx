@@ -471,34 +471,61 @@ function CustomerDashboard({ profile, refreshProfile }: SubDashboardProps) {
             </p>
           </Card>
         ) : (
-          <TableContainer>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Project ID</TableHead>
-                  <TableHead>Title</TableHead>
-                  <TableHead>Category</TableHead>
-                  <TableHead>Budget</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {activeAssignments.map(proj => (
-                  <TableRow key={proj.id}>
-                    <TableCell className="font-bold text-xs font-mono">{proj.id}</TableCell>
-                    <TableCell className="font-semibold text-foreground">{proj.title}</TableCell>
-                    <TableCell>{getProjectTypeLabel(proj.projectType)}</TableCell>
-                    <TableCell className="font-bold text-primary">{formatBudget(proj)}</TableCell>
-                    <TableCell>{getStatusBadge(proj.status)}</TableCell>
-                    <TableCell className="text-right">
-                      <Link href={`/projects/detail?id=${proj.id}`}><Button variant="outline" size="sm">Workspace</Button></Link>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </TableContainer>
+          <>
+            {/* Mobile Card Layout (< 768px) */}
+            <div className="flex flex-col gap-3 md:hidden">
+              {activeAssignments.map(proj => (
+                <Card key={proj.id} className="p-4 border-border/40 bg-card shadow-sm flex flex-col gap-2.5">
+                  <div className="flex justify-between items-start gap-2">
+                    <span className="font-bold text-xs font-mono text-muted-foreground">{proj.id}</span>
+                    {getStatusBadge(proj.status)}
+                  </div>
+                  <h4 className="font-semibold text-sm text-foreground line-clamp-2">{proj.title}</h4>
+                  <div className="flex justify-between items-center text-xs pt-2 border-t border-border/20">
+                    <div>
+                      <span className="text-[10px] text-muted-foreground block uppercase font-bold">Budget</span>
+                      <span className="font-bold text-primary">{formatBudget(proj)}</span>
+                    </div>
+                    <Link href={`/projects/detail?id=${proj.id}`}>
+                      <Button variant="outline" size="sm" className="min-h-[44px] px-4 font-bold">Workspace</Button>
+                    </Link>
+                  </div>
+                </Card>
+              ))}
+            </div>
+
+            {/* Desktop Table Layout (>= 768px) */}
+            <div className="hidden md:block">
+              <TableContainer>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Project ID</TableHead>
+                      <TableHead>Title</TableHead>
+                      <TableHead>Category</TableHead>
+                      <TableHead>Budget</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {activeAssignments.map(proj => (
+                      <TableRow key={proj.id}>
+                        <TableCell className="font-bold text-xs font-mono">{proj.id}</TableCell>
+                        <TableCell className="font-semibold text-foreground">{proj.title}</TableCell>
+                        <TableCell>{getProjectTypeLabel(proj.projectType)}</TableCell>
+                        <TableCell className="font-bold text-primary">{formatBudget(proj)}</TableCell>
+                        <TableCell>{getStatusBadge(proj.status)}</TableCell>
+                        <TableCell className="text-right">
+                          <Link href={`/projects/detail?id=${proj.id}`}><Button variant="outline" size="sm">Workspace</Button></Link>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </div>
+          </>
         )}
       </div>
 
@@ -517,40 +544,66 @@ function CustomerDashboard({ profile, refreshProfile }: SubDashboardProps) {
             </p>
           </Card>
         ) : (
-          <TableContainer>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Request ID</TableHead>
-                  <TableHead>Research Topic / Title</TableHead>
-                  <TableHead>Deliverable Format</TableHead>
-                  <TableHead>Deadline</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {activeResearch.map(req => (
-                  <TableRow key={req.id}>
-                    <TableCell className="font-bold text-xs font-mono">{req.id}</TableCell>
-                    <TableCell className="font-semibold text-foreground max-w-xs truncate">{req.title}</TableCell>
-                    <TableCell>{req.expectedDeliverable}</TableCell>
-                    <TableCell className="font-mono text-xs">📅 {req.deadline}</TableCell>
-                    <TableCell>
-                      <Badge variant="info" className="uppercase text-[9px] font-extrabold px-2 py-0.5">
-                        {req.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Link href={`/research/detail?id=${req.id}`} passHref>
-                        <Button variant="outline" size="sm">Workspace</Button>
-                      </Link>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </TableContainer>
+          <>
+            {/* Mobile Card Layout (< 768px) */}
+            <div className="flex flex-col gap-3 md:hidden">
+              {activeResearch.map(req => (
+                <Card key={req.id} className="p-4 border-border/40 bg-card shadow-sm flex flex-col gap-2.5">
+                  <div className="flex justify-between items-start gap-2">
+                    <span className="font-bold text-xs font-mono text-muted-foreground">{req.id}</span>
+                    <Badge variant="info" className="uppercase text-[9px] font-extrabold px-2 py-0.5">
+                      {req.status}
+                    </Badge>
+                  </div>
+                  <h4 className="font-semibold text-sm text-foreground line-clamp-2">{req.title}</h4>
+                  <div className="flex justify-between items-center text-xs pt-2 border-t border-border/20">
+                    <span className="font-mono text-[11px] text-muted-foreground">📅 {req.deadline}</span>
+                    <Link href={`/research/detail?id=${req.id}`}>
+                      <Button variant="outline" size="sm" className="min-h-[44px] px-4 font-bold">Workspace</Button>
+                    </Link>
+                  </div>
+                </Card>
+              ))}
+            </div>
+
+            {/* Desktop Table Layout (>= 768px) */}
+            <div className="hidden md:block">
+              <TableContainer>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Request ID</TableHead>
+                      <TableHead>Research Topic / Title</TableHead>
+                      <TableHead>Deliverable Format</TableHead>
+                      <TableHead>Deadline</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {activeResearch.map(req => (
+                      <TableRow key={req.id}>
+                        <TableCell className="font-bold text-xs font-mono">{req.id}</TableCell>
+                        <TableCell className="font-semibold text-foreground max-w-xs truncate">{req.title}</TableCell>
+                        <TableCell>{req.expectedDeliverable}</TableCell>
+                        <TableCell className="font-mono text-xs">📅 {req.deadline}</TableCell>
+                        <TableCell>
+                          <Badge variant="info" className="uppercase text-[9px] font-extrabold px-2 py-0.5">
+                            {req.status}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Link href={`/research/detail?id=${req.id}`} passHref>
+                            <Button variant="outline" size="sm">Workspace</Button>
+                          </Link>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </div>
+          </>
         )}
       </div>
 
@@ -569,34 +622,58 @@ function CustomerDashboard({ profile, refreshProfile }: SubDashboardProps) {
             </p>
           </Card>
         ) : (
-          <TableContainer>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Request ID</TableHead>
-                  <TableHead>Research Topic / Title</TableHead>
-                  <TableHead>Proposed Quote</TableHead>
-                  <TableHead>Deadline</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {quotesAwaiting.map(req => (
-                  <TableRow key={req.id}>
-                    <TableCell className="font-bold text-xs font-mono">{req.id}</TableCell>
-                    <TableCell className="font-semibold text-foreground max-w-xs truncate">{req.title}</TableCell>
-                    <TableCell className="font-bold text-primary">K{req.quoteAmount?.toFixed(2)}</TableCell>
-                    <TableCell className="font-mono text-xs">📅 {req.deadline}</TableCell>
-                    <TableCell className="text-right">
-                      <Link href={`/research/detail?id=${req.id}`} passHref>
-                        <Button variant="primary" size="sm">Review & Accept</Button>
-                      </Link>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </TableContainer>
+          <>
+            {/* Mobile Card Layout (< 768px) */}
+            <div className="flex flex-col gap-3 md:hidden">
+              {quotesAwaiting.map(req => (
+                <Card key={req.id} className="p-4 border-border/40 bg-card shadow-sm flex flex-col gap-2.5">
+                  <div className="flex justify-between items-start gap-2">
+                    <span className="font-bold text-xs font-mono text-muted-foreground">{req.id}</span>
+                    <span className="font-bold text-primary font-mono text-sm">K{req.quoteAmount?.toFixed(2)}</span>
+                  </div>
+                  <h4 className="font-semibold text-sm text-foreground line-clamp-2">{req.title}</h4>
+                  <div className="flex justify-between items-center text-xs pt-2 border-t border-border/20">
+                    <span className="font-mono text-[11px] text-muted-foreground">📅 {req.deadline}</span>
+                    <Link href={`/research/detail?id=${req.id}`}>
+                      <Button variant="primary" size="sm" className="min-h-[44px] px-4 font-bold">Review & Accept</Button>
+                    </Link>
+                  </div>
+                </Card>
+              ))}
+            </div>
+
+            {/* Desktop Table Layout (>= 768px) */}
+            <div className="hidden md:block">
+              <TableContainer>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Request ID</TableHead>
+                      <TableHead>Research Topic / Title</TableHead>
+                      <TableHead>Proposed Quote</TableHead>
+                      <TableHead>Deadline</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {quotesAwaiting.map(req => (
+                      <TableRow key={req.id}>
+                        <TableCell className="font-bold text-xs font-mono">{req.id}</TableCell>
+                        <TableCell className="font-semibold text-foreground max-w-xs truncate">{req.title}</TableCell>
+                        <TableCell className="font-bold text-primary">K{req.quoteAmount?.toFixed(2)}</TableCell>
+                        <TableCell className="font-mono text-xs">📅 {req.deadline}</TableCell>
+                        <TableCell className="text-right">
+                          <Link href={`/research/detail?id=${req.id}`} passHref>
+                            <Button variant="primary" size="sm">Review & Accept</Button>
+                          </Link>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </div>
+          </>
         )}
       </div>
 

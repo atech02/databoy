@@ -74,6 +74,7 @@ export default function UploadProject() {
   // Extraction Metadata & Review States
   const [detectedLanguage, setDetectedLanguage] = useState<string>("English");
   const [fieldsRequiringReview, setFieldsRequiringReview] = useState<string[]>([]);
+  const [fieldConfidences, setFieldConfidences] = useState<Record<string, { confidence: "high" | "medium" | "low"; evidence?: string | null }>>({});
   const [autofillSuccessMessage, setAutofillSuccessMessage] = useState<string | null>(null);
 
   // Payment Checkout Modal States
@@ -181,7 +182,7 @@ export default function UploadProject() {
     setBriefFile(file);
     setIsOcrProcessing(true);
     setOcrProgress(10);
-    setOcrLog("Uploading brief document to private storage...");
+    setOcrLog("Uploading your document securely...");
     setOcrConfidence(null);
     setOcrMetrics(null);
 
@@ -193,7 +194,7 @@ export default function UploadProject() {
         throw new Error("You must be signed in to upload assignment files.");
       }
       const uploadRes = await storageService.uploadFile("pending", profile.uid, file, (progress) => {
-        setOcrLog(`Uploading brief document to private R2 storage (${progress}%)...`);
+        setOcrLog(`Uploading your document securely (${progress}%)...`);
       });
       downloadedUrl = uploadRes.url;
       filePath = uploadRes.storageKey;
@@ -238,7 +239,17 @@ export default function UploadProject() {
       result = await ocrService.extractText(
         file, 
         (status, progress) => {
-          setOcrLog(status);
+          let friendlyStatus = status;
+          if (progress <= 25) {
+            friendlyStatus = "Uploading and preparing document...";
+          } else if (progress <= 55) {
+            friendlyStatus = "Processing document layout and text...";
+          } else if (progress <= 85) {
+            friendlyStatus = "Extracting assignment information...";
+          } else {
+            friendlyStatus = "Review required: preparing assignment details...";
+          }
+          setOcrLog(friendlyStatus);
           setOcrProgress(progress);
         },
         projectId,
@@ -332,6 +343,8 @@ export default function UploadProject() {
         const assignedLang = parsed.language || "English";
         const reviewList = parsed.fields_requiring_review || [];
 
+        const confidences = parsed.field_confidences || {};
+        setFieldConfidences(confidences);
         setDetectedLanguage(assignedLang);
         setFieldsRequiringReview(reviewList);
 
@@ -342,32 +355,35 @@ export default function UploadProject() {
           // Keep current form state but trigger suggestion banner/modal
           setShowReviewBanner(true);
         } else {
-          // Auto-populate all supported fields
-          if (assignedBrief) {
+          // Auto-populate based on strict evidence policy:
+          // High: populate with success badge
+          // Medium: populate with warning badge
+          // Low: leave blank/neutral and request manual review
+          if (assignedBrief && confidences.assignment_brief?.confidence !== "low") {
             setGuidelines(assignedBrief);
             briefApplied = "Yes";
           }
-          if (assignedTitle) {
+          if (assignedTitle && confidences.assignment_title?.confidence !== "low") {
             setTitle(assignedTitle);
             titleApplied = "Yes";
           }
-          if (assignedLevel) {
+          if (assignedLevel && confidences.academic_level?.confidence !== "low") {
             setAcademicLevel(assignedLevel);
           }
-          if (assignedSubject) {
+          if (assignedSubject && confidences.subject_or_discipline?.confidence !== "low") {
             setSubject(assignedSubject);
           }
-          if (assignedRef) {
+          if (assignedRef && confidences.referencing_style?.confidence !== "low") {
             setReferencingStyle(assignedRef);
           }
-          if (assignedDeadline) {
+          if (assignedDeadline && confidences.submission_deadline?.confidence !== "low") {
             setDeadline(assignedDeadline);
           }
-          if (assignedPages && !hasManuallyAdjustedPages) {
+          if (confidences.requested_page_count?.confidence === "high" && assignedPages && !hasManuallyAdjustedPages) {
             const safePages = Math.max(1, Math.min(15, assignedPages));
             setPageCount(safePages);
             wordCountApplied = "Yes";
-          } else if (parsed.word_count && !hasManuallyAdjustedPages) {
+          } else if (confidences.word_count?.confidence === "high" && parsed.word_count && !hasManuallyAdjustedPages) {
             const safePages = Math.max(1, Math.min(15, Math.ceil(parsed.word_count / 250)));
             setPageCount(safePages);
             wordCountApplied = "Yes";
@@ -497,12 +513,107 @@ export default function UploadProject() {
     router.push("/dashboard");
   };
 
+  const renderFieldBadge = (fieldName: string) => {
+    const info = fieldConfidences[fieldName];
+    const isUnderReview = fieldsRequiringReview.includes(fieldName) || 
+      (fieldName === "assignment_title" && fieldsRequiringReview.includes("title")) ||
+      (fieldName === "submission_deadline" && fieldsRequiringReview.includes("deadline")) ||
+      (fieldName === "academic_level" && fieldsRequiringReview.includes("academicLevel")) ||
+      (fieldName === "referencing_style" && fieldsRequiringReview.includes("referencingStyle")) ||
+      (fieldName === "subject_or_discipline" && fieldsRequiringReview.includes("subject")) ||
+      (fieldName === "requested_page_count" && fieldsRequiringReview.includes("pageCount"));
+
+    if (info?.confidence === "high" && !isUnderReview) {
+      return (
+        <span className="text-[10px] text-success font-bold flex items-center gap-1">
+          ✓ Extracted
+        </span>
+      );
+    }
+    if (info?.confidence === "medium" || isUnderReview) {
+      return (
+        <span className="text-[10px] text-amber-500 font-bold flex items-center gap-1">
+          ⚠️ Please verify
+        </span>
+      );
+    }
+    return (
+      <span className="text-[10px] text-muted-foreground/80 font-medium flex items-center gap-1">
+        ✏️ Manual entry
+      </span>
+    );
+  };
+
+  const currentWorkflowStep: number = showSuccessModal || showCheckoutModal
+    ? 7
+    : isOcrProcessing
+    ? 2
+    : briefFile && extractedOcrText && fieldsRequiringReview.length > 0
+    ? 3
+    : briefFile && extractedOcrText && (academicPriceZMW > 0)
+    ? 6
+    : briefFile && extractedOcrText
+    ? 5
+    : title || guidelines
+    ? 4
+    : 1;
+
   return (
-    <div className="flex flex-col gap-6 max-w-2xl mx-auto">
+    <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full overflow-x-hidden">
       
       {/* Back button */}
       <div className="flex items-center">
         <BackButton fallbackUrl="/dashboard" label="Dashboard" />
+      </div>
+
+      {/* 7-Step Assignment Review & Pricing Experience Step Tracker */}
+      <div className="w-full bg-card/60 border border-border/30 rounded-2xl p-4 sm:p-5 shadow-sm">
+        <div className="flex items-center justify-between mb-3">
+          <span className="text-xs font-black uppercase tracking-wider text-muted-foreground">
+            Assignment Workflow
+          </span>
+          <span className="text-xs font-bold text-primary bg-primary/10 px-2.5 py-0.5 rounded-full">
+            Step {currentWorkflowStep} of 7 • {
+              currentWorkflowStep === 1 ? "Upload Brief" :
+              currentWorkflowStep === 2 ? "Process Document" :
+              currentWorkflowStep === 3 ? "Review Extracted Details" :
+              currentWorkflowStep === 4 ? "Edit Fields" :
+              currentWorkflowStep === 5 ? "Confirm Requirements" :
+              currentWorkflowStep === 6 ? "Review Pricing" : "Checkout"
+            }
+          </span>
+        </div>
+        
+        <div className="grid grid-cols-7 gap-1 sm:gap-2">
+          {[
+            { num: 1, label: "Upload" },
+            { num: 2, label: "Process" },
+            { num: 3, label: "Review" },
+            { num: 4, label: "Edit" },
+            { num: 5, label: "Confirm" },
+            { num: 6, label: "Pricing" },
+            { num: 7, label: "Checkout" },
+          ].map((s) => (
+            <div key={s.num} className="flex flex-col items-center gap-1">
+              <div
+                className={`w-full h-1.5 rounded-full transition-all duration-300 ${
+                  currentWorkflowStep >= s.num ? "bg-primary" : "bg-secondary"
+                }`}
+              />
+              <span
+                className={`hidden sm:block text-[9px] font-bold truncate ${
+                  currentWorkflowStep === s.num
+                    ? "text-primary font-black"
+                    : currentWorkflowStep > s.num
+                    ? "text-foreground"
+                    : "text-muted-foreground/60"
+                }`}
+              >
+                {s.label}
+              </span>
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* ====================================================================
@@ -596,161 +707,6 @@ export default function UploadProject() {
                     </div>
                   </CardContent>
                 </Card>
-              )}
-
-              {/* DataBoy OCR Diagnostics Panel (Temporary) */}
-              {diagnostics && (
-                <div className="mt-2">
-                  <Card className="border-warning/30 bg-warning/5 font-mono text-xs shadow-inner">
-                    <CardHeader className="pb-2 border-b border-warning/10">
-                      <CardTitle className="text-xs font-bold uppercase tracking-wider text-warning flex items-center justify-between">
-                        <span>🛠️ OCR Diagnostics Console (Temporary)</span>
-                        <button 
-                          type="button" 
-                          onClick={() => setDiagnostics(null)} 
-                          className="text-[10px] text-muted-foreground hover:text-foreground font-bold cursor-pointer"
-                        >
-                          Clear
-                        </button>
-                      </CardTitle>
-                      <CardDescription className="text-[10px] text-muted-foreground">
-                        Real-time pipeline diagnostics for verifying client-side text extraction.
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent className="pt-4 flex flex-col gap-3">
-                      {/* Pipeline Status Summary Bar */}
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-2.5 rounded-lg bg-secondary/30 border border-border/20 text-[10px]">
-                        <div>
-                          <span className="text-muted-foreground block font-bold uppercase text-[9px]">File Type</span>
-                          <span className="font-bold text-foreground">{diagnostics.fileType}</span>
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground block font-bold uppercase text-[9px]">R2 Storage</span>
-                          <span className={`font-bold ${diagnostics.uploadStatus === "Success" ? "text-success" : diagnostics.uploadStatus === "Failed" ? "text-danger" : "text-amber-500"}`}>
-                            {diagnostics.uploadStatus === "Success" ? "✓ Verified" : diagnostics.uploadStatus === "Failed" ? "✗ Failed" : "⏳ Pending"}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground block font-bold uppercase text-[9px]">OCR Pipeline</span>
-                          <span className={`font-bold ${diagnostics.ocrStatus === "Success" ? "text-success" : diagnostics.ocrStatus === "Failed" ? "text-danger" : diagnostics.ocrStatus === "Warning" ? "text-amber-500" : "text-amber-500"}`}>
-                            {diagnostics.ocrStatus === "Success" ? "✓ Local OCR" : diagnostics.ocrStatus === "Failed" ? "✗ Failed" : diagnostics.ocrStatus === "Warning" ? "⚠️ 0 Chars" : "⏳ Running"}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground block font-bold uppercase text-[9px]">Cost & Engine</span>
-                          <span className="font-bold text-success truncate block">0.00 USD (Local Free)</span>
-                        </div>
-                      </div>
-
-                      {/* Unprocessed Pages Safeguard Alert */}
-                      {diagnostics.hasUnprocessedPages && (
-                        <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-700 dark:text-amber-400 text-xs flex flex-col gap-1">
-                          <div className="flex items-center gap-1.5 font-bold">
-                            <span>⚠️</span>
-                            <span>Document Scope Notice (Limits Enforced)</span>
-                          </div>
-                          <p className="text-[10px] leading-relaxed">
-                            {diagnostics.unprocessedReason || `This document has ${diagnostics.pageCount} pages. In-browser processing evaluated ${diagnostics.processedPages} pages. Additional pages require background server processing.`}
-                          </p>
-                        </div>
-                      )}
-
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 border-b border-border/20 pb-3">
-                        <div>
-                          <span className="text-[10px] font-bold text-muted-foreground uppercase block">Stage</span>
-                          <span className="text-foreground font-bold">{diagnostics.stage || "Processing"}</span>
-                        </div>
-                        <div>
-                          <span className="text-[10px] font-bold text-muted-foreground uppercase block">Pages Scanned</span>
-                          <span className="text-foreground font-bold">
-                            {diagnostics.processedPages || 1} of {diagnostics.pageCount || 1} {diagnostics.hasUnprocessedPages ? "(Partial)" : "(Complete)"}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="text-[10px] font-bold text-muted-foreground uppercase block">Extracted Characters</span>
-                          <span className={`font-bold ${diagnostics.charCount > 0 ? "text-success" : "text-amber-500"}`}>
-                            {diagnostics.charCount} chars {diagnostics.charCount === 0 && !isOcrProcessing ? "(Empty)" : ""}
-                          </span>
-                        </div>
-                        <div className="sm:col-span-3">
-                          <span className="text-[10px] font-bold text-muted-foreground uppercase block">Field Population Status</span>
-                          <div className="flex flex-wrap gap-3 mt-1 text-[10px]">
-                            <span>Brief Applied: <strong className={diagnostics.briefApplied === "Yes" ? "text-success" : "text-amber-500"}>{diagnostics.briefApplied}</strong></span>
-                            <span>Title Applied: <strong className={diagnostics.titleApplied === "Yes" ? "text-success" : "text-amber-500"}>{diagnostics.titleApplied}</strong></span>
-                            <span>Word Count Applied: <strong className={diagnostics.wordCountApplied === "Yes" ? "text-success" : "text-amber-500"}>{diagnostics.wordCountApplied}</strong></span>
-                            {diagnostics.cacheKey && (
-                              <span className="text-muted-foreground font-mono text-[9px]">Cache Key: {String(diagnostics.cacheKey).slice(0, 24)}...</span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="border-b border-border/20 pb-3">
-                        <div className="flex justify-between items-center mb-1">
-                          <span className="text-[10px] font-bold text-muted-foreground uppercase">Extracted Text Preview</span>
-                          {diagnostics.preview && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (navigator.clipboard) {
-                                  navigator.clipboard.writeText(extractedOcrText || diagnostics.preview);
-                                  alert("Extracted text copied to clipboard!");
-                                }
-                              }}
-                              className="text-[9px] font-bold text-primary hover:underline cursor-pointer"
-                            >
-                              📋 Copy Text
-                            </button>
-                          )}
-                        </div>
-                        <pre className="p-2.5 bg-secondary/35 rounded-lg border border-border/30 max-h-[120px] overflow-y-auto whitespace-pre-wrap text-[10px] leading-relaxed text-foreground/80 font-mono">
-                          {diagnostics.preview || "(Waiting for text extraction...)"}
-                        </pre>
-                      </div>
-
-                      <div className="border-b border-border/20 pb-3">
-                        <span className="text-[10px] font-bold text-muted-foreground uppercase block mb-1">Step 5: Parser Output</span>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[10px] font-semibold text-foreground/90">
-                          <div>Detected Title: <span className="font-bold text-foreground">{diagnostics.parsedTitle}</span></div>
-                          <div>Detected Word Count: <span className="font-bold text-foreground">{diagnostics.parsedWordCount !== undefined ? diagnostics.parsedWordCount : "None"}</span></div>
-                          <div>Detected Referencing: <span className="font-bold text-foreground">{diagnostics.parsedReferencingStyle}</span></div>
-                          <div>Detected Deadline: <span className="font-bold text-foreground">{diagnostics.parsedDeadline}</span></div>
-                          <div className="sm:col-span-2 mt-1">
-                            <span className="text-muted-foreground block text-[9px] uppercase font-bold mb-0.5">Detected Brief Content:</span>
-                            <span className="italic block bg-secondary/10 p-1.5 rounded border border-border/10 truncate max-w-full">
-                              {diagnostics.parsedBrief}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div>
-                        <span className="text-[10px] font-bold text-muted-foreground uppercase block mb-1">Step 6: Error & Diagnostics Log</span>
-                        {diagnostics.errors && diagnostics.errors.length > 0 ? (
-                          <div className="flex flex-col gap-1.5">
-                            {diagnostics.uploadErrors && diagnostics.uploadErrors.length > 0 && (
-                              <div className="bg-danger/10 border border-danger/30 p-2 rounded-lg text-danger text-[10px] font-bold">
-                                <strong>R2 Upload Error:</strong> {diagnostics.uploadErrors.join(" • ")}
-                              </div>
-                            )}
-                            {diagnostics.ocrErrors && diagnostics.ocrErrors.length > 0 && (
-                              <div className="bg-amber-500/10 border border-amber-500/30 p-2 rounded-lg text-amber-600 text-[10px] font-bold">
-                                <strong>OCR Processing Note:</strong> {diagnostics.ocrErrors.join(" • ")}
-                              </div>
-                            )}
-                            {!diagnostics.uploadErrors?.length && !diagnostics.ocrErrors?.length && diagnostics.errors.map((err: string, idx: number) => (
-                              <div key={idx} className="bg-danger/10 border border-danger/20 p-2 rounded-lg text-danger text-[10px] font-bold">
-                                ❌ {err}
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <span className="text-[10px] text-success font-bold block">✓ Pipeline healthy: No upload or extraction errors captured.</span>
-                        )}
-                      </div>
-                    </CardContent>
-                  </Card>
-                </div>
               )}
 
               {/* Overwrite protection suggestion banner */}
@@ -890,9 +846,7 @@ export default function UploadProject() {
                   label={
                     <span className="flex items-center justify-between w-full">
                       <span>Assignment Title</span>
-                      {(fieldsRequiringReview.includes("assignment_title") || fieldsRequiringReview.includes("title")) && (
-                        <span className="text-[10px] text-amber-500 font-bold ml-2">⚠️ Needs Review</span>
-                      )}
+                      {renderFieldBadge("assignment_title")}
                     </span>
                   }
                   placeholder="e.g. Econometrics Balance Sheet Study or Java Socket Server"
@@ -909,9 +863,7 @@ export default function UploadProject() {
                     label={
                       <span className="flex items-center justify-between w-full">
                         <span>Academic Level</span>
-                        {(fieldsRequiringReview.includes("academic_level") || fieldsRequiringReview.includes("academicLevel")) && (
-                          <span className="text-[10px] text-amber-500 font-bold ml-2">⚠️ Confirm Level</span>
-                        )}
+                        {renderFieldBadge("academic_level")}
                       </span>
                     }
                     options={ACADEMIC_LEVELS}
@@ -923,9 +875,7 @@ export default function UploadProject() {
                     label={
                       <span className="flex items-center justify-between w-full">
                         <span>Subject / Discipline</span>
-                        {(fieldsRequiringReview.includes("subject_or_discipline") || fieldsRequiringReview.includes("subject")) && (
-                          <span className="text-[10px] text-amber-500 font-bold ml-2">⚠️ Confirm Subject</span>
-                        )}
+                        {renderFieldBadge("subject_or_discipline")}
                       </span>
                     }
                     options={[
@@ -942,9 +892,7 @@ export default function UploadProject() {
                      label={
                        <span className="flex items-center justify-between w-full">
                          <span>Referencing Style</span>
-                         {(fieldsRequiringReview.includes("referencing_style") || fieldsRequiringReview.includes("referencingStyle")) && (
-                           <span className="text-[10px] text-amber-500 font-bold ml-2">⚠️ Confirm Style</span>
-                         )}
+                         {renderFieldBadge("referencing_style")}
                        </span>
                      }
                      options={[
@@ -964,9 +912,7 @@ export default function UploadProject() {
                     label={
                       <span className="flex items-center justify-between w-full">
                         <span>Submission Target Deadline</span>
-                        {(fieldsRequiringReview.includes("submission_deadline") || fieldsRequiringReview.includes("deadline")) && (
-                          <span className="text-[10px] text-amber-500 font-bold ml-2">⚠️ Confirm Deadline</span>
-                        )}
+                        {renderFieldBadge("submission_deadline")}
                       </span>
                     }
                     type="date"
@@ -981,9 +927,7 @@ export default function UploadProject() {
                   <div className="flex justify-between items-center">
                     <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
                       <span>Select Page Budget</span>
-                      {(fieldsRequiringReview.includes("requested_page_count") || fieldsRequiringReview.includes("pageCount")) && (
-                        <span className="text-[10px] text-amber-500 font-bold">⚠️ Confirm Length</span>
-                      )}
+                      {renderFieldBadge("requested_page_count")}
                     </span>
                     <span className="text-sm font-black text-primary bg-primary/10 px-2.5 py-1 rounded-lg">
                       {pageCount} {pageCount === 1 ? "Page" : "Pages"}
@@ -1037,17 +981,15 @@ export default function UploadProject() {
                       <span className="text-success text-base font-black">K{academicPriceZMW.toFixed(2)}</span>
                     </div>
 
-                    <div className="flex justify-between font-medium text-muted-foreground">
-                      <span>Writer Allocation Share (50%)</span>
-                      <span className="font-semibold text-foreground">K{breakdown.writer.toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between font-medium text-muted-foreground">
-                      <span>Proofreader Reviewer Allocation (16.67%)</span>
-                      <span className="font-semibold text-foreground">K{breakdown.proofreader.toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between font-medium text-muted-foreground">
-                      <span>DataBoy Platform Escrow Fee (33.33%)</span>
-                      <span className="font-semibold text-foreground">K{breakdown.databoy.toFixed(2)}</span>
+                    {/* Customer-facing milestone protection notice (Replaces internal commission splits) */}
+                    <div className="p-3 bg-secondary/25 rounded-lg border border-border/20 flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-2 text-muted-foreground">
+                        <span className="text-base">🛡️</span>
+                        <span className="font-medium text-foreground">DataBoy Milestone Escrow</span>
+                      </div>
+                      <span className="text-[10px] font-bold text-success uppercase tracking-wider bg-success/10 px-2 py-0.5 rounded-full">
+                        AI-Free & Protected
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -1059,6 +1001,34 @@ export default function UploadProject() {
             </form>
           </CardContent>
         </Card>
+
+      {/* Admin-Only RBAC Protected Diagnostics (Invisible to Students) */}
+      {profile?.role === "admin" && diagnostics && (
+        <details className="mt-4 p-4 bg-secondary/15 border border-warning/30 rounded-xl text-xs font-mono text-muted-foreground">
+          <summary className="cursor-pointer font-bold text-warning flex items-center justify-between select-none">
+            <span className="flex items-center gap-2">🛠️ Admin Diagnostics & Telemetry (RBAC Protected)</span>
+            <span className="text-[10px] uppercase bg-warning/10 text-warning px-2 py-0.5 rounded">Admin Only</span>
+          </summary>
+          <div className="pt-3 flex flex-col gap-2 border-t border-border/20 mt-2">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px]">
+              <div>File Type: <strong className="text-foreground">{diagnostics.fileType}</strong></div>
+              <div>R2 Status: <strong className={diagnostics.uploadStatus === "Success" ? "text-success" : "text-danger"}>{diagnostics.uploadStatus}</strong></div>
+              <div>OCR Status: <strong className={diagnostics.ocrStatus === "Success" ? "text-success" : "text-amber-500"}>{diagnostics.ocrStatus}</strong></div>
+              <div>Pages: <strong className="text-foreground">{diagnostics.processedPages || 1} / {diagnostics.pageCount || 1}</strong></div>
+            </div>
+            {diagnostics.cacheKey && (
+              <div className="text-[9px] text-muted-foreground/80 break-all font-mono">
+                Cache Key: {String(diagnostics.cacheKey)}
+              </div>
+            )}
+            {diagnostics.preview && (
+              <pre className="p-2 bg-secondary/40 rounded max-h-24 overflow-y-auto text-[9px] whitespace-pre-wrap">
+                {diagnostics.preview}
+              </pre>
+            )}
+          </div>
+        </details>
+      )}
 
       {/* ======================================================================
           LIPILA MOBILE MONEY CHECKOUT MODAL

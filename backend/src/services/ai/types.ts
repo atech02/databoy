@@ -65,6 +65,7 @@ export interface ParsedAssignmentFields {
   language?: string | null;
   extraction_confidence?: "high" | "medium" | "low";
   fields_requiring_review?: string[];
+  field_confidences?: Record<string, { confidence: "high" | "medium" | "low"; evidence?: string | null }>;
 
   // Backward compatibility aliases
   title?: string | null;
