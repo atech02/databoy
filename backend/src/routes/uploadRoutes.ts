@@ -1466,6 +1466,7 @@ export function createUploadRouter(limiters: RateLimiterBundle): Router {
         fileName: fileRecord.fileName || "document",
         userUid: user.uid,
         clientRawText: typeof req.body?.clientRawText === "string" ? req.body.clientRawText : undefined,
+        forceMultimodal: Boolean(req.body?.forceMultimodal),
       });
 
       res.status(200).json({

@@ -137,8 +137,11 @@ export function parseOCRText(rawText: string): ParsedAssignmentFields {
     rawText.match(/\b(?:assignment\s+title|coursework\s+title|essay\s+title|topic|title|titre(?:\s+du\s+devoir|\s+du\s+projet)?|intitulé|sujet|título|thema)\s*[:\-]\s*([^\r\n]+)/i);
 
   if (explicitTitleMatch && explicitTitleMatch[1]?.trim().length >= 3) {
-    const candidate = explicitTitleMatch[1].trim().replace(/^[#*\s-]+|[#*\s-]+$/g, "");
-    if (candidate.length <= 250) {
+    let candidate = explicitTitleMatch[1].trim().replace(/^[#*\s-]+|[#*\s-]+$/g, "");
+    if (candidate.includes("|")) {
+      candidate = candidate.split("|")[0].trim().replace(/^[#*\s-]+|[#*\s-]+$/g, "");
+    }
+    if (candidate.length >= 3 && candidate.length <= 250) {
       fields.assignment_title = candidate;
       fields.title = candidate;
       fieldConfidences.assignment_title = { confidence: "high", evidence: explicitTitleMatch[0].trim() };
@@ -178,10 +181,15 @@ export function parseOCRText(rawText: string): ParsedAssignmentFields {
     });
 
     if (titleCandidate) {
-      const clean = titleCandidate.replace(/^[#*\s-]+|[#*\s-]+$/g, "");
-      fields.assignment_title = clean;
-      fields.title = clean;
-      fieldConfidences.assignment_title = { confidence: "medium", evidence: clean };
+      let clean = titleCandidate.replace(/^[#*\s-]+|[#*\s-]+$/g, "");
+      if (clean.includes("|")) {
+        clean = clean.split("|")[0].trim().replace(/^[#*\s-]+|[#*\s-]+$/g, "");
+      }
+      if (clean.length >= 3) {
+        fields.assignment_title = clean;
+        fields.title = clean;
+        fieldConfidences.assignment_title = { confidence: "medium", evidence: clean };
+      }
     } else {
       fields.assignment_title = null;
       fields.title = null;

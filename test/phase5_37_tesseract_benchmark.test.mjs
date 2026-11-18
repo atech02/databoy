@@ -124,12 +124,13 @@ test("1.1 Self-Hosted Tesseract Assets Verification (Zero Remote CDN Dependency)
 test("1.2 Configuration Paths & Fallback Integrity", () => {
   assert.strictEqual(TESSERACT_VERSION, "5.1.0", "Tesseract version pinned to 5.1.0");
   assert.strictEqual(TESSERACT_LOCAL_CONFIG.workerPath, "/vendor/tesseract/worker.min.js");
-  assert.strictEqual(TESSERACT_LOCAL_CONFIG.corePath, "/vendor/tesseract/tesseract-core-simd.wasm");
+  assert.strictEqual(TESSERACT_LOCAL_CONFIG.corePath, "/vendor/tesseract/tesseract-core.wasm.js", "Self-hosted core loader pointing to standalone JS WASM wrapper");
   assert.strictEqual(TESSERACT_LOCAL_CONFIG.langPath, "/vendor/tesseract");
   assert.strictEqual(TESSERACT_LOCAL_CONFIG.gzip, true, "Gzip enabled for bandwidth savings");
 
   assert.ok(TESSERACT_CDN_CONFIG.workerPath.includes("5.1.0"), "CDN fallback pinned to 5.1.0");
   assert.ok(TESSERACT_CDN_CONFIG.corePath.includes("5.1.0"), "CDN core fallback pinned to 5.1.0");
+  assert.ok(TESSERACT_CDN_CONFIG.corePath.endsWith("tesseract-core.wasm.js"), "CDN core fallback points to wasm.js wrapper");
 });
 
 // ============================================================================
@@ -437,3 +438,71 @@ test("7.1 Spark Free-Tier ($0.00/mo) & Platform Invariants Preserved", () => {
   assert.strictEqual(commission.proofreader, 63.35);
   assert.strictEqual(commission.databoy, 126.65);
 });
+
+// ============================================================================
+// SUITE 8: PHASE 5.37B REMEDIATION VERIFICATION
+// ============================================================================
+
+test("8.1 Assignment Title Parsing Stops at Table Column Delimiters (|)", () => {
+  const tableText = `
+| Assignment Title: International Commercial Law | Due Date: 2026-12-15 | Word Count: 3000 words |
+| Instructions: Critically evaluate the CISG conventions. |
+  `;
+
+  // Test Client Parser
+  const clientParsed = parseOCRText(tableText);
+  assert.strictEqual(
+    clientParsed.assignment_title,
+    "International Commercial Law",
+    "Client parser must stop title candidate extraction before table delimiter '|'"
+  );
+  assert.strictEqual(clientParsed.title, "International Commercial Law");
+
+  // Test Backend Parser
+  const backendParsed = parseBackendText(tableText);
+  assert.strictEqual(
+    backendParsed.assignment_title,
+    "International Commercial Law",
+    "Backend parser must stop title candidate extraction before table delimiter '|'"
+  );
+  assert.strictEqual(backendParsed.title, "International Commercial Law");
+
+  // Test with colon and pipe without spaces
+  const tightTableText = "Title:Contract Law|Word Count:2500";
+  const tightClient = parseOCRText(tightTableText);
+  assert.strictEqual(tightClient.title, "Contract Law");
+  const tightBackend = parseBackendText(tightTableText);
+  assert.strictEqual(tightBackend.title, "Contract Law");
+});
+
+test("8.2 Escalation Criteria: Low Confidence (<50) & Gibberish Route to Multimodal", () => {
+  // Test Case 1: High confidence coherent text
+  const highConfText = "Course: Computer Science. Assignment Title: Distributed Systems. Word count: 2000 words. Deadline: 2026-11-30.";
+  const highConfResult = {
+    confidence: 85,
+    rawText: highConfText,
+  };
+  const isHighConfGibberish = detectGibberishText(highConfResult.rawText);
+  const shouldEscalateHigh = highConfResult.confidence < 50 || isHighConfGibberish;
+  assert.strictEqual(shouldEscalateHigh, false, "High confidence (>=50) and coherent text must NOT trigger multimodal escalation");
+
+  // Test Case 2: Low confidence (<50) coherent text
+  const lowConfResult = {
+    confidence: 42,
+    rawText: highConfText,
+  };
+  const shouldEscalateLowConf = lowConfResult.confidence < 50 || detectGibberishText(lowConfResult.rawText);
+  assert.strictEqual(shouldEscalateLowConf, true, "Low confidence (<50) must trigger multimodal escalation");
+
+  // Test Case 3: High confidence but garbled OCR noise
+  const garbledNoise = "x#@ §¶§ 1234 %% ^^ && *&^% ~~~ \n \t ##@@";
+  const garbledResult = {
+    confidence: 90, // Tesseract might erroneously report high confidence on character recognition of symbols
+    rawText: garbledNoise,
+  };
+  const isGarbled = detectGibberishText(garbledResult.rawText);
+  assert.strictEqual(isGarbled, true, "Garbled noise must be flagged as gibberish");
+  const shouldEscalateGarbled = garbledResult.confidence < 50 || isGarbled;
+  assert.strictEqual(shouldEscalateGarbled, true, "Gibberish text must trigger multimodal escalation regardless of raw confidence score");
+});
+

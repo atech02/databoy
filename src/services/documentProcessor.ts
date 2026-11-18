@@ -16,14 +16,14 @@ export const OCR_SUPPORTED_LANGS = ["eng", "fra", "eng+fra"] as const;
 export const LOCAL_OCR_VENDOR_PATH = "/vendor/tesseract";
 export const TESSERACT_LOCAL_CONFIG = {
   workerPath: "/vendor/tesseract/worker.min.js",
-  corePath: "/vendor/tesseract/tesseract-core-simd.wasm",
+  corePath: "/vendor/tesseract/tesseract-core.wasm.js",
   langPath: "/vendor/tesseract",
   gzip: true,
 } as const;
 
 export const TESSERACT_CDN_CONFIG = {
   workerPath: `https://cdn.jsdelivr.net/npm/tesseract.js@${TESSERACT_VERSION}/dist/worker.min.js`,
-  corePath: `https://cdn.jsdelivr.net/npm/tesseract.js-core@${TESSERACT_VERSION}/tesseract-core-simd.wasm`,
+  corePath: `https://cdn.jsdelivr.net/npm/tesseract.js-core@${TESSERACT_VERSION}/tesseract-core.wasm.js`,
   langPath: "https://tessdata.projectnaptha.com/4.0.0_fast",
   gzip: true,
 } as const;

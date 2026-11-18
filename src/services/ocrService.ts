@@ -1,4 +1,4 @@
-import { DocumentProcessor, ExtractionResult, ExtractionOptions, resolveOcrLanguage } from "./documentProcessor";
+import { DocumentProcessor, ExtractionResult, ExtractionOptions, resolveOcrLanguage, detectGibberishText } from "./documentProcessor";
 import { parseOCRText, ParsedAssignmentFields } from "@/utils/ocrParser";
 import { apiClient } from "@/services/apiClient";
 
@@ -83,7 +83,13 @@ export const ocrService = {
     }
 
     // 2. Evaluate Local Extraction Quality
-    if (clientResult && clientResult.rawText && clientResult.rawText.trim().length > 0) {
+    const hasLocalText = Boolean(clientResult && clientResult.rawText && clientResult.rawText.trim().length > 0);
+    const isLowConfidenceOrGibberish =
+      !hasLocalText ||
+      (clientResult ? clientResult.confidence < 50 || detectGibberishText(clientResult.rawText) : true);
+
+    // Path A: High-Confidence Local Extraction (>= 50 confidence and not gibberish)
+    if (hasLocalText && !isLowConfidenceOrGibberish && clientResult) {
       onProgress("Structuring assignment brief fields...", 90);
 
       let parsed = parseOCRText(clientResult.rawText);
@@ -151,34 +157,106 @@ export const ocrService = {
       };
     }
 
-    // 3. Fallback: Only invoke backend if local extraction produced 0 characters AND fileId exists
+    // Path B: Low-Confidence OCR / Gibberish / Empty -> Escalate to Gemini Multimodal Vision
     if (fileId) {
       try {
-        onProgress("Local OCR did not detect characters. Invoking backup verification...", 60);
+        onProgress("Low local confidence detected. Escalating to Gemini multimodal vision...", 75);
+        // CRITICAL: Omit clientRawText so backend retrieves R2 buffer for multimodal vision
         const backendRes = await apiClient.post<any>(`/api/uploads/${fileId}/ocr`, {
           fileId,
+          forceMultimodal: true,
         });
 
-        if (backendRes && backendRes.success && backendRes.rawText && backendRes.rawText.trim().length > 0) {
+        if (backendRes && backendRes.success && (backendRes.parsedFields || backendRes.rawText)) {
           onProgress("Structuring assignment brief...", 95);
           const durationMs = Math.round(performance.now() - startTime);
 
+          const parsed = backendRes.parsedFields || parseOCRText(backendRes.rawText || "");
+          const rawText = backendRes.rawText || (clientResult?.rawText || "");
+
+          const completenessScore =
+            (parsed.title || parsed.assignment_title ? 20 : 0) +
+            (parsed.guidelines || parsed.questions || parsed.assignment_brief ? 30 : 0) +
+            (parsed.wordCount || parsed.word_count ? 20 : 0) +
+            (parsed.referencingStyle || parsed.referencing_style ? 15 : 0) +
+            (parsed.deadline || parsed.submission_deadline ? 15 : 0);
+
+          const ocrMetrics: OCRMetrics = backendRes.ocrMetrics || {
+            fileType,
+            extractionMethod: "Gemini 2.5 Flash Multimodal Vision",
+            status: "Success",
+            durationMs,
+            confidenceScore: backendRes.confidence === "high" ? 95 : 75,
+            completenessScore,
+            pageCount: clientResult?.pageCount,
+            processedPages: clientResult?.processedPages,
+            hasUnprocessedPages: clientResult?.hasUnprocessedPages,
+            unprocessedReason: clientResult?.unprocessedReason,
+            cacheKey: clientResult?.cacheKey,
+            engineVersion: clientResult?.engineVersion,
+            warnings: clientResult?.warnings,
+            isPartial: clientResult?.isPartial,
+            requestCostEstimate: 0,
+          };
+
+          onProgress("Extraction complete.", 100);
+
           return {
-            rawText: backendRes.rawText,
-            parsed: backendRes.parsedFields || parseOCRText(backendRes.rawText),
-            confidence: backendRes.confidence || "medium",
-            ocrMetrics: backendRes.ocrMetrics || {
-              fileType,
-              extractionMethod: "backend_fallback",
-              status: "Success",
-              durationMs,
-              confidenceScore: 70,
-            },
+            rawText,
+            parsed,
+            confidence: (backendRes.confidence as any) || "high",
+            ocrMetrics,
+            isPartial: clientResult?.isPartial,
+            unprocessedReason: clientResult?.unprocessedReason,
+            cacheKey: clientResult?.cacheKey,
           };
         }
       } catch (backendErr: any) {
-        console.warn("[ocrService] Backend backup extraction also failed:", backendErr);
+        console.warn("[ocrService] Gemini multimodal escalation failed:", backendErr);
       }
+    }
+
+    // Path C: Fallback to local raw text if available even with low confidence
+    if (hasLocalText && clientResult) {
+      const parsed = parseOCRText(clientResult.rawText);
+      const durationMs = Math.round(performance.now() - startTime);
+
+      const completenessScore =
+        (parsed.title || parsed.assignment_title ? 20 : 0) +
+        (parsed.guidelines || parsed.questions || parsed.assignment_brief ? 30 : 0) +
+        (parsed.wordCount || parsed.word_count ? 20 : 0) +
+        (parsed.referencingStyle || parsed.referencing_style ? 15 : 0) +
+        (parsed.deadline || parsed.submission_deadline ? 15 : 0);
+
+      const ocrMetrics: OCRMetrics = {
+        fileType,
+        extractionMethod: clientResult.method,
+        status: "Success",
+        durationMs,
+        confidenceScore: clientResult.confidence,
+        completenessScore,
+        pageCount: clientResult.pageCount,
+        processedPages: clientResult.processedPages,
+        hasUnprocessedPages: clientResult.hasUnprocessedPages,
+        unprocessedReason: clientResult.unprocessedReason,
+        cacheKey: clientResult.cacheKey,
+        engineVersion: clientResult.engineVersion,
+        warnings: [...(clientResult.warnings || []), "Low confidence local extraction without multimodal recovery"],
+        isPartial: clientResult.isPartial,
+        requestCostEstimate: 0,
+      };
+
+      onProgress("Extraction complete.", 100);
+
+      return {
+        rawText: clientResult.rawText,
+        parsed,
+        confidence: "low",
+        ocrMetrics,
+        isPartial: clientResult.isPartial,
+        unprocessedReason: clientResult.unprocessedReason,
+        cacheKey: clientResult.cacheKey,
+      };
     }
 
     // 4. Handle Case where No Readable Text Was Found

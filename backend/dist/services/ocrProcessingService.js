@@ -88,8 +88,11 @@ export function parseTextToAssignmentFields(rawText) {
     // 1. Title detection with contextual signals
     const explicitTitleMatch = rawText.match(/\b(?:assignment\s+title|coursework\s+title|essay\s+title|topic|title|titre(?:\s+du\s+devoir|\s+du\s+projet)?|intitulé|sujet|título|thema)\s*[:\-]\s*([^\r\n]+)/i);
     if (explicitTitleMatch && explicitTitleMatch[1]?.trim().length >= 3) {
-        const candidate = explicitTitleMatch[1].trim().replace(/^[#*\s-]+|[#*\s-]+$/g, "");
-        if (candidate.length <= 250) {
+        let candidate = explicitTitleMatch[1].trim().replace(/^[#*\s-]+|[#*\s-]+$/g, "");
+        if (candidate.includes("|")) {
+            candidate = candidate.split("|")[0].trim().replace(/^[#*\s-]+|[#*\s-]+$/g, "");
+        }
+        if (candidate.length >= 3 && candidate.length <= 250) {
             fields.assignment_title = candidate;
             fields.title = candidate;
             fieldConfidences.assignment_title = { confidence: "high", evidence: explicitTitleMatch[0].trim() };
@@ -132,10 +135,15 @@ export function parseTextToAssignmentFields(rawText) {
             return !titleSkipWords.includes(firstWord) && !titleSkipWords.some((kw) => lower.startsWith(kw) || lower.includes("deadline:") || lower.includes("date limite:"));
         });
         if (titleCandidate) {
-            const clean = titleCandidate.replace(/^[#*\s-]+|[#*\s-]+$/g, "");
-            fields.assignment_title = clean;
-            fields.title = clean;
-            fieldConfidences.assignment_title = { confidence: "medium", evidence: clean };
+            let clean = titleCandidate.replace(/^[#*\s-]+|[#*\s-]+$/g, "");
+            if (clean.includes("|")) {
+                clean = clean.split("|")[0].trim().replace(/^[#*\s-]+|[#*\s-]+$/g, "");
+            }
+            if (clean.length >= 3) {
+                fields.assignment_title = clean;
+                fields.title = clean;
+                fieldConfidences.assignment_title = { confidence: "medium", evidence: clean };
+            }
         }
         else {
             fields.assignment_title = null;
@@ -472,16 +480,16 @@ function extractTextFromPdfBuffer(buffer) {
 }
 export const ocrProcessingService = {
     async processFile(params) {
-        const { fileId, storageKey, contentType, fileName, userUid, clientRawText } = params;
+        const { fileId, storageKey, contentType, fileName, userUid, clientRawText, forceMultimodal } = params;
         const startTime = Date.now();
         const ext = fileName.split(".").pop()?.toLowerCase() || "";
         const isImage = ["png", "jpg", "jpeg", "webp"].includes(ext) || contentType.startsWith("image/");
         const isPdf = ext === "pdf" || contentType === "application/pdf";
         const isDocx = ext === "docx" || ext === "doc" || contentType.includes("wordprocessingml");
-        let rawText = clientRawText?.trim() || "";
+        let rawText = forceMultimodal ? "" : (clientRawText?.trim() || "");
         let fileBuffer = null;
-        // 1. If client did not provide rawText, fetch buffer from R2
-        if (!rawText && storageKey) {
+        // 1. If client did not provide rawText (or forceMultimodal is requested), fetch buffer from R2
+        if ((!rawText || forceMultimodal) && storageKey) {
             try {
                 fileBuffer = await r2StorageService.getObjectBuffer(storageKey);
             }
@@ -489,8 +497,8 @@ export const ocrProcessingService = {
                 console.warn(`[OCR] Failed to fetch R2 buffer for ${storageKey}:`, r2Err);
             }
         }
-        // 2. Perform local buffer extraction if rawText is still empty
-        if (!rawText && fileBuffer) {
+        // 2. Perform local buffer extraction if rawText is still empty and not forcing multimodal
+        if (!rawText && !forceMultimodal && fileBuffer) {
             if (isPdf) {
                 rawText = extractTextFromPdfBuffer(fileBuffer);
             }
@@ -500,7 +508,11 @@ export const ocrProcessingService = {
                 rawText = matches.map((m) => m.replace(/<[^>]+>/g, "")).join(" ");
             }
         }
-        let extractionMethod = rawText.length > 50 ? (clientRawText ? "client_stage1_ocr" : "backend_direct_stream") : "pending";
+        let extractionMethod = forceMultimodal
+            ? "backend_gemini_multimodal"
+            : rawText.length > 50
+                ? (clientRawText ? "client_stage1_ocr" : "backend_direct_stream")
+                : "pending";
         let parsedFields = {};
         let confidence = "medium";
         let modelUsed;
@@ -508,7 +520,7 @@ export const ocrProcessingService = {
         let requestCostEstimate;
         // 3. Delegate structured understanding to AIOrchestrationService
         try {
-            const multimodalBuffer = !rawText && fileBuffer && (isImage || isPdf) ? {
+            const multimodalBuffer = (!rawText || forceMultimodal) && fileBuffer && (isImage || isPdf) ? {
                 mimeType: isImage ? (ext === "png" ? "image/png" : "image/jpeg") : "application/pdf",
                 buffer: fileBuffer,
             } : undefined;
@@ -530,6 +542,21 @@ export const ocrProcessingService = {
                 completionTokens: orchestration.tokenUsage.completionTokens,
             } : undefined;
             requestCostEstimate = 0; // Free-tier optimization
+            // If rawText was empty (e.g. multimodal vision escalation), reconstruct text from parsed fields
+            if (!rawText && parsedFields) {
+                const textParts = [
+                    parsedFields.title ? `Title: ${parsedFields.title}` : "",
+                    parsedFields.subject ? `Subject: ${parsedFields.subject}` : "",
+                    parsedFields.wordCount ? `Word Count: ${parsedFields.wordCount}` : "",
+                    parsedFields.deadline ? `Deadline: ${parsedFields.deadline}` : "",
+                    parsedFields.referencingStyle ? `Referencing: ${parsedFields.referencingStyle}` : "",
+                    parsedFields.questions ? `Questions:\n${parsedFields.questions}` : "",
+                    parsedFields.guidelines ? `Guidelines:\n${parsedFields.guidelines}` : "",
+                ].filter(Boolean);
+                if (textParts.length > 0) {
+                    rawText = textParts.join("\n\n");
+                }
+            }
         }
         catch (aiErr) {
             console.warn("[OCR] AI Orchestration fallback to rule parser:", aiErr);
