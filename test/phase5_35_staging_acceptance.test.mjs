@@ -36,6 +36,7 @@ import {
   evaluatePageIsScanned,
   PREPROCESSING_CONFIG,
   OCR_DEFAULT_LANG,
+  OCR_SUPPORTED_LANGS,
 } from "../src/services/documentProcessor.ts";
 
 console.log("================================================================================");
@@ -140,7 +141,8 @@ test("1.4 Rotated, Blurred & Degraded Document Handling", () => {
   assert.strictEqual(PREPROCESSING_CONFIG.binarizeThreshold, 128, "Binarize threshold configured");
   assert.strictEqual(PREPROCESSING_CONFIG.minWidth, 800, "Minimum width scaling configured");
   assert.strictEqual(PREPROCESSING_CONFIG.contrastBoost, 35, "Contrast boost factor configured");
-  assert.strictEqual(OCR_DEFAULT_LANG, "eng+fra", "Bilingual OCR default must be eng+fra");
+  assert.ok(["eng", "eng+fra"].includes(OCR_DEFAULT_LANG), "OCR default must be eng or eng+fra");
+  assert.ok(OCR_SUPPORTED_LANGS.includes("fra"), "OCR must support French without translation");
 
   // Non-alphabetic garbled noise from extreme optical blur
   const blurredNoise = "[]|||\\\\ ////// &&&&&& %%%% $$$$ 00101010101010 8888 7777 9999 ??? !!!";

@@ -1,4 +1,4 @@
-import { DocumentProcessor, ExtractionResult, ExtractionOptions } from "./documentProcessor";
+import { DocumentProcessor, ExtractionResult, ExtractionOptions, resolveOcrLanguage } from "./documentProcessor";
 import { parseOCRText, ParsedAssignmentFields } from "@/utils/ocrParser";
 import { apiClient } from "@/services/apiClient";
 
@@ -63,13 +63,19 @@ export const ocrService = {
     let localError: Error | null = null;
 
     // 1. Stage 1: Execute Local In-Browser OCR & Text Extraction First
+    const resolvedLang = resolveOcrLanguage(options?.lang, file.name);
+    const enrichedOptions: ExtractionOptions = {
+      ...options,
+      lang: resolvedLang,
+    };
+
     try {
       clientResult = await DocumentProcessor.process(
         file,
         (p) => {
           onProgress(p.status, Math.round(15 + p.progressPercent * 0.8));
         },
-        options
+        enrichedOptions
       );
     } catch (err: any) {
       localError = err;

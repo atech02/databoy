@@ -116,6 +116,9 @@ export function parseTextToAssignmentFields(rawText) {
         const titleCandidate = lines.find((line) => {
             if (line.length < 5 || line.length > 90)
                 return false;
+            const letterCount = (line.match(/[\p{L}]/gu) || []).length;
+            if (letterCount < 4)
+                return false;
             if (line.endsWith("?"))
                 return false;
             if (/\.\s+[A-Za-z]/.test(line))

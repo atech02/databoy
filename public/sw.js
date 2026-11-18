@@ -1,4 +1,5 @@
 const CACHE_NAME = "databoy-cache-v10";
+const OCR_CACHE_NAME = "databoy-ocr-assets-v1";
 const OFFLINE_URL = "/offline";
 
 const ASSETS_TO_CACHE = [
@@ -24,7 +25,7 @@ self.addEventListener("activate", (event) => {
     caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames.map((cache) => {
-          if (cache !== CACHE_NAME) {
+          if (cache !== CACHE_NAME && cache !== OCR_CACHE_NAME) {
             return caches.delete(cache);
           }
         })
@@ -82,7 +83,29 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // 3. Fallback for other requests (Network-First/Fetch-Only)
+  // 3. OCR Engine & Language Traineddata Assets (Cache-First, On-Demand Caching)
+  // Ensures Tesseract WebWorker, WASM core, and traineddata models are cached after first use
+  // without bloating the initial app installation bundle.
+  if (url.pathname.startsWith("/vendor/tesseract/")) {
+    event.respondWith(
+      caches.open(OCR_CACHE_NAME).then((cache) => {
+        return cache.match(event.request).then((cachedResponse) => {
+          if (cachedResponse) {
+            return cachedResponse;
+          }
+          return fetch(event.request).then((networkResponse) => {
+            if (networkResponse && networkResponse.status === 200) {
+              cache.put(event.request, networkResponse.clone());
+            }
+            return networkResponse;
+          });
+        });
+      })
+    );
+    return;
+  }
+
+  // 4. Fallback for other requests (Network-First/Fetch-Only)
   // We do NOT cache Next.js static chunks or database calls to avoid caching dynamic state.
   event.respondWith(
     fetch(event.request).catch(() => {

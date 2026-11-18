@@ -21,6 +21,7 @@ import {
   evaluatePageIsScanned,
   PREPROCESSING_CONFIG,
   OCR_DEFAULT_LANG,
+  OCR_SUPPORTED_LANGS,
 } from "../src/services/documentProcessor.ts";
 
 // Backend modules
@@ -81,9 +82,9 @@ test("Archetype 2: Degraded OCR noise & Garbled Scan Discrimination", () => {
   assert.strictEqual(detectGibberishText(garbledNoise), true, "Garbled text must be flagged as gibberish");
   assert.strictEqual(evaluatePageIsScanned(15, garbledNoise), true, "Garbled text must trigger scanned OCR flow");
 
-  // Multi-language OCR default includes French
-  assert(OCR_DEFAULT_LANG.includes("eng"), "OCR must support English");
-  assert(OCR_DEFAULT_LANG.includes("fra"), "OCR must support French without translation");
+  // Multi-language OCR configuration (English primary default, French supported)
+  assert.strictEqual(OCR_DEFAULT_LANG, "eng", "OCR must default to English for normal workflows");
+  assert(OCR_SUPPORTED_LANGS.includes("fra"), "OCR must support French without translation");
 });
 
 // ============================================================================

@@ -8,7 +8,25 @@ export const SCANNED_PDF_MAX_PAGES = 5;
 export const TESSERACT_VERSION = "5.1.0";
 export const PDFJS_VERSION = "3.11.174";
 export const JSZIP_VERSION = "3.10.1";
-export const OCR_DEFAULT_LANG = "eng+fra";
+export const OCR_DEFAULT_LANG = "eng";
+export const OCR_FALLBACK_LANG = "eng+fra";
+export const OCR_SUPPORTED_LANGS = ["eng", "fra", "eng+fra"] as const;
+
+// Self-Hosted Asset & CDN Fallback Configuration
+export const LOCAL_OCR_VENDOR_PATH = "/vendor/tesseract";
+export const TESSERACT_LOCAL_CONFIG = {
+  workerPath: "/vendor/tesseract/worker.min.js",
+  corePath: "/vendor/tesseract/tesseract-core-simd.wasm",
+  langPath: "/vendor/tesseract",
+  gzip: true,
+} as const;
+
+export const TESSERACT_CDN_CONFIG = {
+  workerPath: `https://cdn.jsdelivr.net/npm/tesseract.js@${TESSERACT_VERSION}/dist/worker.min.js`,
+  corePath: `https://cdn.jsdelivr.net/npm/tesseract.js-core@${TESSERACT_VERSION}/tesseract-core-simd.wasm`,
+  langPath: "https://tessdata.projectnaptha.com/4.0.0_fast",
+  gzip: true,
+} as const;
 
 // Canonical Preprocessing Configuration
 export const PREPROCESSING_CONFIG = {
@@ -60,7 +78,245 @@ export interface ExtractionOptions {
   signal?: AbortSignal;
   resumablePages?: Map<number, PageExtractionResult>;
   onPageComplete?: (page: PageExtractionResult) => void;
+  lang?: string;
+  dpi?: number;
+  psm?: string;
 }
+
+/**
+ * Resolves the optimal Tesseract OCR language:
+ * - Defaults to English ("eng") for standard academic workflows to eliminate dictionary contamination and reduce bandwidth.
+ * - Switches to French ("fra") when explicitly requested or when French signals are detected in filename or text.
+ * - Uses bilingual ("eng+fra") only when both languages are actively present.
+ * - Does not use browser language as the sole signal.
+ */
+export function resolveOcrLanguage(detectedOrRequested?: string, filename?: string, sampleText?: string): string {
+  if (detectedOrRequested && ["eng", "fra", "eng+fra"].includes(detectedOrRequested)) {
+    return detectedOrRequested;
+  }
+
+  // Check filename cues
+  const lowerName = (filename || "").toLowerCase();
+  const frenchNameSignals = [
+    "devoir", "projet", "consigne", "consignes", "rapport", "cours", "licence",
+    "francais", "français", "memoire", "mémoire", "travail", "examen", "sujet"
+  ];
+  const hasFrenchFilename = frenchNameSignals.some((s) => lowerName.includes(s));
+
+  if (sampleText && sampleText.trim().length > 20) {
+    const lowerText = sampleText.toLowerCase();
+    const frenchSignals = [
+      " le ", " la ", " les ", " des ", " dans ", " pour ", " avec ", " une ", " sur ", " du ",
+      " devoir ", " travail ", " note ", " etudiant ", " étudiante ", " étudiant ",
+      " consignes ", " universite ", " université ", " semestre ", " session "
+    ];
+    const englishSignals = [
+      " the ", " and ", " of ", " to ", " in ", " for ", " with ", " is ", " on ",
+      " assignment ", " student ", " course ", " deadline ", " instructions ", " university "
+    ];
+
+    const frHits = frenchSignals.filter((s) => lowerText.includes(s)).length;
+    const enHits = englishSignals.filter((s) => lowerText.includes(s)).length;
+
+    if (frHits >= 3 && enHits < 2) return "fra";
+    if (frHits >= 2 && enHits >= 2) return "eng+fra";
+  }
+
+  if (hasFrenchFilename) return "fra";
+
+  return OCR_DEFAULT_LANG;
+}
+
+/**
+ * Concurrency Mutex ensuring at most ONE Tesseract OCR worker is active across the client.
+ * Critical for mobile resilience on devices with 1 GB–2 GB RAM, preventing browser tab crashes.
+ */
+export class OcrMutex {
+  private locked = false;
+  private queue: (() => void)[] = [];
+
+  async acquire(signal?: AbortSignal): Promise<() => void> {
+    if (signal?.aborted) {
+      throw new Error("OCR operation aborted before acquiring worker lock.");
+    }
+
+    if (!this.locked) {
+      this.locked = true;
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        this.release();
+      };
+    }
+
+    return new Promise<() => void>((resolve, reject) => {
+      const resume = () => {
+        signal?.removeEventListener("abort", onAbort);
+        let released = false;
+        resolve(() => {
+          if (released) return;
+          released = true;
+          this.release();
+        });
+      };
+
+      const onAbort = () => {
+        const idx = this.queue.indexOf(resume);
+        if (idx !== -1) {
+          this.queue.splice(idx, 1);
+        }
+        signal?.removeEventListener("abort", onAbort);
+        reject(new Error("OCR operation cancelled while waiting for worker lock."));
+      };
+
+      if (signal) {
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
+      this.queue.push(resume);
+    });
+  }
+
+  private release(): void {
+    if (this.queue.length > 0) {
+      const next = this.queue.shift();
+      if (next) next();
+    } else {
+      this.locked = false;
+    }
+  }
+
+  isLocked(): boolean {
+    return this.locked;
+  }
+}
+
+export const ocrConcurrencyMutex = new OcrMutex();
+
+/**
+ * Loads the Tesseract.js bundle in the browser:
+ * 1. Checks if `window.Tesseract` is already loaded.
+ * 2. Attempts to load self-hosted `/vendor/tesseract/tesseract.min.js`.
+ * 3. Gracefully falls back to CDN if local asset fails to load.
+ */
+export async function loadTesseractScript(): Promise<any> {
+  if (typeof window === "undefined") return null;
+  const win = window as any;
+  if (win.Tesseract) return win.Tesseract;
+
+  // Try local vendor first
+  try {
+    return await new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = `${LOCAL_OCR_VENDOR_PATH}/tesseract.min.js`;
+      script.async = true;
+      script.onload = () => resolve((window as any).Tesseract);
+      script.onerror = () => reject(new Error("Local Tesseract script failed to load"));
+      document.body.appendChild(script);
+    });
+  } catch (localErr) {
+    console.warn("[DocumentProcessor] Local Tesseract script failed, falling back to CDN:", localErr);
+    return await new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = `https://cdn.jsdelivr.net/npm/tesseract.js@${TESSERACT_VERSION}/dist/tesseract.min.js`;
+      script.async = true;
+      script.onload = () => resolve((window as any).Tesseract);
+      script.onerror = () => reject(new Error("Failed to load OCR engine from both local vendor and CDN."));
+      document.body.appendChild(script);
+    });
+  }
+}
+
+export interface DocumentWorkerInstance {
+  worker: any;
+  terminate: () => Promise<void>;
+  lang: string;
+}
+
+export const TesseractWorkerManager = {
+  async createDocumentWorker(params: {
+    lang?: string;
+    signal?: AbortSignal;
+    onProgress?: (progress: ExtractionProgress) => void;
+    dpi?: number;
+    psm?: string;
+  }): Promise<DocumentWorkerInstance> {
+    if (params.signal?.aborted) {
+      throw new Error("OCR worker creation cancelled by user.");
+    }
+
+    const Tesseract = await loadTesseractScript();
+    if (!Tesseract) {
+      throw new Error("Tesseract engine is unavailable in non-browser environment.");
+    }
+
+    const targetLang = params.lang || OCR_DEFAULT_LANG;
+    let worker: any = null;
+    let isTerminated = false;
+
+    const logger = (m: any) => {
+      if (params.onProgress && m.status === "recognizing text" && typeof m.progress === "number") {
+        params.onProgress({
+          status: `Recognizing text (${Math.round(m.progress * 100)}%)...`,
+          progressPercent: Math.round(50 + m.progress * 45),
+        });
+      }
+    };
+
+    // 1. Try local self-hosted worker first
+    try {
+      worker = await Tesseract.createWorker(targetLang, 1, {
+        ...TESSERACT_LOCAL_CONFIG,
+        logger,
+      });
+    } catch (localWorkerErr) {
+      console.warn("[TesseractWorkerManager] Self-hosted worker initialization failed, trying CDN fallback:", localWorkerErr);
+      worker = await Tesseract.createWorker(targetLang, 1, {
+        ...TESSERACT_CDN_CONFIG,
+        logger,
+      });
+    }
+
+    // Configure DPI and page segmentation
+    try {
+      if (typeof worker.setParameters === "function") {
+        await worker.setParameters({
+          user_defined_dpi: String(params.dpi || 300),
+          tessedit_pageseg_mode: params.psm || "3", // PSM 3: Fully automatic page segmentation (default)
+        });
+      }
+    } catch (paramErr) {
+      console.warn("[TesseractWorkerManager] Warning setting worker parameters:", paramErr);
+    }
+
+    const terminate = async () => {
+      if (isTerminated || !worker) return;
+      isTerminated = true;
+      try {
+        await worker.terminate();
+      } catch (termErr) {
+        console.warn("[TesseractWorkerManager] Worker termination error:", termErr);
+      }
+    };
+
+    // Handle immediate abort
+    if (params.signal) {
+      if (params.signal.aborted) {
+        await terminate();
+        throw new Error("OCR worker creation aborted.");
+      }
+      params.signal.addEventListener("abort", () => {
+        terminate();
+      }, { once: true });
+    }
+
+    return {
+      worker,
+      terminate,
+      lang: targetLang,
+    };
+  },
+};
 
 export interface DocumentExtractor {
   extractText(
@@ -682,23 +938,8 @@ export class PDFTextExtractor implements DocumentExtractor {
     });
   }
 
-  private async loadTesseract(): Promise<any> {
-    if (typeof window === "undefined") return null;
-    const win = window as any;
-    if (win.Tesseract) {
-      return win.Tesseract;
-    }
-
-    return new Promise((resolve, reject) => {
-      const script = document.createElement("script");
-      script.src = `https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js`;
-      script.async = true;
-      script.onload = () => {
-        resolve((window as any).Tesseract);
-      };
-      script.onerror = () => reject(new Error("Failed to load OCR engine from CDN."));
-      document.body.appendChild(script);
-    });
+  public async loadTesseract(): Promise<any> {
+    return loadTesseractScript();
   }
 
   async extractText(
@@ -842,165 +1083,177 @@ export class PDFTextExtractor implements DocumentExtractor {
     }
 
     // =========================================================================
-    // CASE B: Scanned PDF (Sequential In-Browser Canvas + Tesseract.js OCR)
+    // CASE B: Scanned PDF (Sequential In-Browser Canvas + Persistent Tesseract.js OCR)
     // =========================================================================
     onProgress({
-      status: "Scanned document detected. Initializing local OCR engine...",
+      status: "Scanned document detected. Acquiring OCR worker lock...",
       progressPercent: 48,
     });
 
-    const Tesseract = await this.loadTesseract();
-    const scannedTargetPages = Math.min(totalPages, SCANNED_PDF_MAX_PAGES);
-    const ocrPageResults: PageExtractionResult[] = [];
-    const hasUnprocessed = totalPages > SCANNED_PDF_MAX_PAGES;
-    let unprocessedReason: string | undefined;
+    const releaseLock = await ocrConcurrencyMutex.acquire(options?.signal);
+    let workerInstance: DocumentWorkerInstance | null = null;
 
-    if (hasUnprocessed) {
-      unprocessedReason = `Scanned PDF contains ${totalPages} pages. The first ${SCANNED_PDF_MAX_PAGES} pages were recognized locally. Pages ${SCANNED_PDF_MAX_PAGES + 1}–${totalPages} require background server OCR.`;
-      warnings.push(unprocessedReason);
-    }
+    try {
+      const ocrLang = resolveOcrLanguage(options?.lang, file.name);
+      onProgress({
+        status: `Initializing ${ocrLang.toUpperCase()} OCR engine...`,
+        progressPercent: 49,
+      });
 
-    for (let pageNum = 1; pageNum <= scannedTargetPages; pageNum++) {
-      if (options?.signal?.aborted) {
-        throw new Error("Scanned PDF OCR cancelled by user.");
+      workerInstance = await TesseractWorkerManager.createDocumentWorker({
+        lang: ocrLang,
+        signal: options?.signal,
+        dpi: options?.dpi || 300,
+        psm: options?.psm,
+      });
+
+      const scannedTargetPages = Math.min(totalPages, SCANNED_PDF_MAX_PAGES);
+      const ocrPageResults: PageExtractionResult[] = [];
+      const hasUnprocessed = totalPages > SCANNED_PDF_MAX_PAGES;
+      let unprocessedReason: string | undefined;
+
+      if (hasUnprocessed) {
+        unprocessedReason = `Scanned PDF contains ${totalPages} pages. The first ${SCANNED_PDF_MAX_PAGES} pages were recognized locally. Pages ${SCANNED_PDF_MAX_PAGES + 1}–${totalPages} require background server OCR.`;
+        warnings.push(unprocessedReason);
       }
 
-      // Check if page already OCR-ed in resumable state
-      if (
-        options?.resumablePages &&
-        options.resumablePages.has(pageNum) &&
-        options.resumablePages.get(pageNum)!.method.includes("OCR")
-      ) {
-        const cached = options.resumablePages.get(pageNum)!;
-        ocrPageResults.push(cached);
-        continue;
-      }
+      for (let pageNum = 1; pageNum <= scannedTargetPages; pageNum++) {
+        if (options?.signal?.aborted) {
+          throw new Error("Scanned PDF OCR cancelled by user.");
+        }
 
-      onProgress({
-        status: `Rendering page ${pageNum} of ${scannedTargetPages} to high-resolution canvas...`,
-        progressPercent: Math.round(50 + ((pageNum - 1) / scannedTargetPages) * 45),
-        currentPage: pageNum,
-        totalPages: scannedTargetPages,
-      });
+        // Check if page already OCR-ed in resumable state
+        if (
+          options?.resumablePages &&
+          options.resumablePages.has(pageNum) &&
+          options.resumablePages.get(pageNum)!.method.includes("OCR")
+        ) {
+          const cached = options.resumablePages.get(pageNum)!;
+          ocrPageResults.push(cached);
+          continue;
+        }
 
-      const page = await pdf.getPage(pageNum);
-      const viewport = page.getViewport({ scale: PDF_RENDER_CONFIG.scale });
-
-      const canvas = document.createElement("canvas");
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      const context = canvas.getContext("2d");
-
-      if (!context) {
-        cleanupCanvas(canvas);
-        page.cleanup();
-        throw new Error(`Failed to create 2D canvas context for page ${pageNum}.`);
-      }
-
-      // Sequential render to avoid memory spikes
-      const renderTask = page.render({
-        canvasContext: context,
-        viewport,
-        intent: PDF_RENDER_CONFIG.intent,
-      });
-      await renderTask.promise;
-
-      // Apply image enhancement and binarization
-      onProgress({
-        status: `Enhancing contrast and binarizing page ${pageNum}...`,
-        progressPercent: Math.round(50 + ((pageNum - 0.5) / scannedTargetPages) * 45),
-        currentPage: pageNum,
-        totalPages: scannedTargetPages,
-      });
-
-      const processedCanvas = preprocessCanvas(canvas);
-
-      onProgress({
-        status: `Recognizing text on page ${pageNum} of ${scannedTargetPages}...`,
-        progressPercent: Math.round(50 + (pageNum / scannedTargetPages) * 45),
-        currentPage: pageNum,
-        totalPages: scannedTargetPages,
-      });
-
-      let pageOcrText = "";
-      let pageConfidence = 85;
-
-      try {
-        const ocrRes = await Tesseract.recognize(processedCanvas, OCR_DEFAULT_LANG, {
-          logger: (m: any) => {
-            if (m.status === "recognizing text" && typeof m.progress === "number") {
-              const baseP = 50 + ((pageNum - 1) / scannedTargetPages) * 45;
-              const stepP = (m.progress / scannedTargetPages) * 45;
-              onProgress({
-                status: `Recognizing characters on page ${pageNum} (${Math.round(m.progress * 100)}%)...`,
-                progressPercent: Math.round(baseP + stepP),
-                currentPage: pageNum,
-                totalPages: scannedTargetPages,
-              });
-            }
-          },
+        onProgress({
+          status: `Rendering page ${pageNum} of ${scannedTargetPages} to canvas...`,
+          progressPercent: Math.round(50 + ((pageNum - 1) / scannedTargetPages) * 45),
+          currentPage: pageNum,
+          totalPages: scannedTargetPages,
         });
 
-        pageOcrText = (ocrRes?.data?.text || "").trim();
-        pageConfidence = Math.round(ocrRes?.data?.confidence || 80);
-      } catch (ocrErr: any) {
-        console.warn(`[PDF OCR] Page ${pageNum} character recognition failed:`, ocrErr);
-        pageOcrText = "";
-        pageConfidence = 10;
-        warnings.push(`Page ${pageNum} character recognition failed: ${ocrErr?.message || ocrErr}`);
-      } finally {
-        // Enforce immediate canvas and page memory teardown
-        cleanupCanvas(canvas);
-        if (processedCanvas !== canvas) {
-          cleanupCanvas(processedCanvas);
-        }
-        try {
+        const page = await pdf.getPage(pageNum);
+        const viewport = page.getViewport({ scale: PDF_RENDER_CONFIG.scale });
+
+        const canvas = document.createElement("canvas");
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        const context = canvas.getContext("2d");
+
+        if (!context) {
+          cleanupCanvas(canvas);
           page.cleanup();
-        } catch {}
+          throw new Error(`Failed to create 2D canvas context for page ${pageNum}.`);
+        }
+
+        // Sequential render to avoid memory spikes
+        const renderTask = page.render({
+          canvasContext: context,
+          viewport,
+          intent: PDF_RENDER_CONFIG.intent,
+        });
+        await renderTask.promise;
+
+        // Apply image enhancement and binarization
+        onProgress({
+          status: `Enhancing page ${pageNum}...`,
+          progressPercent: Math.round(50 + ((pageNum - 0.5) / scannedTargetPages) * 45),
+          currentPage: pageNum,
+          totalPages: scannedTargetPages,
+        });
+
+        const processedCanvas = preprocessCanvas(canvas);
+
+        onProgress({
+          status: `Recognizing text on page ${pageNum} of ${scannedTargetPages}...`,
+          progressPercent: Math.round(50 + (pageNum / scannedTargetPages) * 45),
+          currentPage: pageNum,
+          totalPages: scannedTargetPages,
+        });
+
+        let pageOcrText = "";
+        let pageConfidence = 85;
+
+        try {
+          const ocrRes = await workerInstance.worker.recognize(processedCanvas);
+          pageOcrText = (ocrRes?.data?.text || "").trim();
+          pageConfidence = Math.round(ocrRes?.data?.confidence || 80);
+        } catch (ocrErr: any) {
+          console.warn(`[PDF OCR] Page ${pageNum} character recognition failed:`, ocrErr);
+          pageOcrText = "";
+          pageConfidence = 10;
+          warnings.push(`Page ${pageNum} character recognition failed: ${ocrErr?.message || ocrErr}`);
+        } finally {
+          // Enforce immediate canvas and page memory teardown
+          cleanupCanvas(canvas);
+          if (processedCanvas !== canvas) {
+            cleanupCanvas(processedCanvas);
+          }
+          try {
+            page.cleanup();
+          } catch {}
+        }
+
+        const pageOcrResult: PageExtractionResult = {
+          pageNumber: pageNum,
+          text: pageOcrText,
+          confidence: Math.max(10, Math.min(100, pageConfidence)),
+          method: `Client Scanned PDF OCR (${ocrLang})`,
+          charCount: pageOcrText.length,
+          isScanned: true,
+        };
+
+        ocrPageResults.push(pageOcrResult);
+        options?.onPageComplete?.(pageOcrResult);
       }
 
-      const pageOcrResult: PageExtractionResult = {
-        pageNumber: pageNum,
-        text: pageOcrText,
-        confidence: Math.max(10, Math.min(100, pageConfidence)),
-        method: "Client Scanned PDF OCR",
-        charCount: pageOcrText.length,
-        isScanned: true,
+      const fullScannedText = ocrPageResults
+        .map((p) => p.text)
+        .filter((t) => t.length > 0)
+        .join("\n\n")
+        .trim();
+
+      const avgConfidence =
+        ocrPageResults.length > 0
+          ? Math.round(
+              ocrPageResults.reduce((acc, p) => acc + p.confidence, 0) / ocrPageResults.length
+            )
+          : 50;
+
+      onProgress({ status: "Local scanned PDF OCR complete.", progressPercent: 100 });
+
+      return {
+        rawText: fullScannedText,
+        confidence: avgConfidence,
+        method: `Client Scanned PDF OCR (${ocrLang})`,
+        pageCount: totalPages,
+        processedPages: ocrPageResults.length,
+        hasUnprocessedPages: hasUnprocessed,
+        unprocessedReason,
+        pageResults: ocrPageResults,
+        cacheKey,
+        engineVersion: `pdfjs@${PDFJS_VERSION}_tesseract@${TESSERACT_VERSION}`,
+        warnings,
+        isPartial: hasUnprocessed,
       };
-
-      ocrPageResults.push(pageOcrResult);
-      options?.onPageComplete?.(pageOcrResult);
+    } finally {
+      if (workerInstance) {
+        try {
+          await workerInstance.terminate();
+        } catch (termErr) {
+          console.warn("[PDFTextExtractor] Worker termination error:", termErr);
+        }
+      }
+      releaseLock();
     }
-
-    const fullScannedText = ocrPageResults
-      .map((p) => p.text)
-      .filter((t) => t.length > 0)
-      .join("\n\n")
-      .trim();
-
-    const avgConfidence =
-      ocrPageResults.length > 0
-        ? Math.round(
-            ocrPageResults.reduce((acc, p) => acc + p.confidence, 0) / ocrPageResults.length
-          )
-        : 50;
-
-    onProgress({ status: "Local scanned PDF OCR complete.", progressPercent: 100 });
-
-    return {
-      rawText: fullScannedText,
-      confidence: avgConfidence,
-      method: "Client Scanned PDF OCR",
-      pageCount: totalPages,
-      processedPages: ocrPageResults.length,
-      hasUnprocessedPages: hasUnprocessed,
-      unprocessedReason,
-      pageResults: ocrPageResults,
-      cacheKey,
-      engineVersion: `pdfjs@${PDFJS_VERSION}_tesseract@${TESSERACT_VERSION}`,
-      warnings,
-      isPartial: hasUnprocessed,
-    };
   }
 }
 
@@ -1009,23 +1262,8 @@ export class PDFTextExtractor implements DocumentExtractor {
  * Preprocesses raster images (PNG, JPG, JPEG, WEBP) on an HTML5 canvas before running Tesseract.js.
  */
 export class ImageTextExtractor implements DocumentExtractor {
-  private async loadTesseract(): Promise<any> {
-    if (typeof window === "undefined") return null;
-    const win = window as any;
-    if (win.Tesseract) {
-      return win.Tesseract;
-    }
-
-    return new Promise((resolve, reject) => {
-      const script = document.createElement("script");
-      script.src = `https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js`;
-      script.async = true;
-      script.onload = () => {
-        resolve((window as any).Tesseract);
-      };
-      script.onerror = () => reject(new Error("Failed to load OCR engine from CDN."));
-      document.body.appendChild(script);
-    });
+  public async loadTesseract(): Promise<any> {
+    return loadTesseractScript();
   }
 
   private async loadImageToCanvas(file: File): Promise<HTMLCanvasElement> {
@@ -1081,77 +1319,86 @@ export class ImageTextExtractor implements DocumentExtractor {
       throw new Error("Image OCR cancelled by user.");
     }
 
-    onProgress({ status: "Loading image and optical recognition engine...", progressPercent: 15 });
-    const arrayBuffer = await file.arrayBuffer();
-
-    const cacheKey = await buildDeterministicCacheKey({
-      fileBuffer: arrayBuffer,
-      fileType: "image",
-      engineVersion: `tesseract@${TESSERACT_VERSION}`,
-    });
-
-    const Tesseract = await this.loadTesseract();
-    if (!Tesseract) {
-      throw new Error("Tesseract engine is unavailable in non-browser environment.");
-    }
-
-    if (options?.signal?.aborted) {
-      throw new Error("Image OCR cancelled by user.");
-    }
-
-    onProgress({ status: "Preprocessing image layout & boosting contrast...", progressPercent: 30 });
-    const rawCanvas = await this.loadImageToCanvas(file);
-    const preprocessedCanvas = preprocessCanvas(rawCanvas);
-
-    onProgress({ status: "Recognizing characters from image...", progressPercent: 50 });
-    let text = "";
-    let confidence = 85;
+    onProgress({ status: "Acquiring OCR worker lock...", progressPercent: 10 });
+    const releaseLock = await ocrConcurrencyMutex.acquire(options?.signal);
+    let workerInstance: DocumentWorkerInstance | null = null;
 
     try {
-      const ret = await Tesseract.recognize(preprocessedCanvas, OCR_DEFAULT_LANG, {
-        logger: (m: any) => {
-          if (m.status === "recognizing text" && typeof m.progress === "number") {
-            onProgress({
-              status: `Reading text from assignment image (${Math.round(m.progress * 100)}%)...`,
-              progressPercent: Math.round(50 + m.progress * 45),
-            });
-          }
-        },
+      const arrayBuffer = await file.arrayBuffer();
+      const ocrLang = resolveOcrLanguage(options?.lang, file.name);
+
+      const cacheKey = await buildDeterministicCacheKey({
+        fileBuffer: arrayBuffer,
+        fileType: "image",
+        engineVersion: `tesseract@${TESSERACT_VERSION}`,
+        language: ocrLang,
       });
 
-      text = (ret?.data?.text || "").trim();
-      confidence = Math.round(ret?.data?.confidence || 85);
-    } finally {
-      cleanupCanvas(rawCanvas);
-      if (preprocessedCanvas !== rawCanvas) {
-        cleanupCanvas(preprocessedCanvas);
+      onProgress({ status: `Initializing ${ocrLang.toUpperCase()} OCR engine...`, progressPercent: 20 });
+      workerInstance = await TesseractWorkerManager.createDocumentWorker({
+        lang: ocrLang,
+        signal: options?.signal,
+        dpi: options?.dpi || 300,
+        psm: options?.psm,
+      });
+
+      if (options?.signal?.aborted) {
+        throw new Error("Image OCR cancelled by user.");
       }
+
+      onProgress({ status: "Preprocessing image layout & boosting contrast...", progressPercent: 35 });
+      const rawCanvas = await this.loadImageToCanvas(file);
+      const preprocessedCanvas = preprocessCanvas(rawCanvas);
+
+      onProgress({ status: "Recognizing characters from image...", progressPercent: 55 });
+      let text = "";
+      let confidence = 85;
+
+      try {
+        const ret = await workerInstance.worker.recognize(preprocessedCanvas);
+        text = (ret?.data?.text || "").trim();
+        confidence = Math.round(ret?.data?.confidence || 85);
+      } finally {
+        cleanupCanvas(rawCanvas);
+        if (preprocessedCanvas !== rawCanvas) {
+          cleanupCanvas(preprocessedCanvas);
+        }
+      }
+
+      const pageResult: PageExtractionResult = {
+        pageNumber: 1,
+        text,
+        confidence: Math.max(10, Math.min(100, confidence)),
+        method: `Client Image OCR (${ocrLang})`,
+        charCount: text.length,
+        isScanned: true,
+      };
+
+      onProgress({ status: "Image character recognition complete.", progressPercent: 100 });
+
+      return {
+        rawText: text,
+        confidence: Math.max(10, Math.min(100, confidence)),
+        method: `Client Image OCR (${ocrLang})`,
+        pageCount: 1,
+        processedPages: 1,
+        hasUnprocessedPages: false,
+        pageResults: [pageResult],
+        cacheKey,
+        engineVersion: `tesseract@${TESSERACT_VERSION}`,
+        warnings: [],
+        isPartial: false,
+      };
+    } finally {
+      if (workerInstance) {
+        try {
+          await workerInstance.terminate();
+        } catch (termErr) {
+          console.warn("[ImageTextExtractor] Termination error:", termErr);
+        }
+      }
+      releaseLock();
     }
-
-    const pageResult: PageExtractionResult = {
-      pageNumber: 1,
-      text,
-      confidence: Math.max(10, Math.min(100, confidence)),
-      method: "Client Image OCR",
-      charCount: text.length,
-      isScanned: true,
-    };
-
-    onProgress({ status: "Image character recognition complete.", progressPercent: 100 });
-
-    return {
-      rawText: text,
-      confidence: Math.max(10, Math.min(100, confidence)),
-      method: "Client Image OCR",
-      pageCount: 1,
-      processedPages: 1,
-      hasUnprocessedPages: false,
-      pageResults: [pageResult],
-      cacheKey,
-      engineVersion: `tesseract@${TESSERACT_VERSION}`,
-      warnings: [],
-      isPartial: false,
-    };
   }
 }
 
