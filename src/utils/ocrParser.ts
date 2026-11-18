@@ -23,6 +23,7 @@ export interface ParsedAssignmentFields {
   extraction_confidence?: "high" | "medium" | "low";
   fields_requiring_review?: string[];
   field_confidences?: Record<string, FieldConfidenceInfo>;
+  fieldConfidences?: Record<string, FieldConfidenceInfo>;
 
   // Backward compatibility aliases
   title?: string | null;
@@ -188,7 +189,7 @@ export function parseOCRText(rawText: string): ParsedAssignmentFields {
   }
 
   // 2. Identify Referencing Style
-  const refStyles = ["APA", "Harvard", "MLA", "Chicago", "IEEE", "Vancouver"];
+  const refStyles = ["APA", "Harvard", "MLA", "Chicago", "IEEE", "Vancouver", "OSCOLA"];
   for (const style of refStyles) {
     const regex = new RegExp(`\\b${style}\\b`, "i");
     if (regex.test(rawText)) {
@@ -388,6 +389,7 @@ export function parseOCRText(rawText: string): ParsedAssignmentFields {
   }
 
   fields.field_confidences = fieldConfidences;
+  fields.fieldConfidences = fieldConfidences;
   fields.fields_requiring_review = reviewFields;
   fields.extraction_confidence = reviewFields.length <= 1 && fields.title ? "high" : reviewFields.length <= 3 ? "medium" : "low";
 

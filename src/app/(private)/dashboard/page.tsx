@@ -128,7 +128,7 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="flex flex-col gap-8">
+    <div className="flex flex-col gap-8 overflow-x-hidden">
       {/* ⚠️ Glowing HSL Network & Database Connection Alert Warning */}
       {error && (
         <Card className="border-amber-500/25 bg-amber-500/5 dark:bg-amber-500/5 animate-pulse shadow-[0_0_15px_rgba(245,158,11,0.15)]">

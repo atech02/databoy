@@ -142,7 +142,7 @@ export function parseTextToAssignmentFields(rawText) {
         }
     }
     // 2. Referencing Style
-    const refStyles = ["APA", "Harvard", "MLA", "Chicago", "IEEE", "Vancouver"];
+    const refStyles = ["APA", "Harvard", "MLA", "Chicago", "IEEE", "Vancouver", "OSCOLA"];
     for (const style of refStyles) {
         const regex = new RegExp(`\\b${style}\\b`, "i");
         if (regex.test(rawText)) {
@@ -334,6 +334,7 @@ export function parseTextToAssignmentFields(rawText) {
         reviewFields.push("assignment_brief");
     }
     fields.field_confidences = fieldConfidences;
+    fields.fieldConfidences = fieldConfidences;
     fields.fields_requiring_review = reviewFields;
     fields.extraction_confidence = reviewFields.length <= 1 && fields.title ? "high" : reviewFields.length <= 3 ? "medium" : "low";
     return fields;

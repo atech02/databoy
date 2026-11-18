@@ -758,7 +758,15 @@ export function createAssignmentRouter(limiters) {
                 res.status(403).json({ error: "Access denied" });
                 return;
             }
-            res.status(200).json({ assignment: project });
+            const sanitizedProject = { ...project };
+            if (user.role === "customer" && !isAdmin) {
+                delete sanitizedProject.writerCommission;
+                delete sanitizedProject.proofreaderCommission;
+                delete sanitizedProject.databoyCommission;
+                delete sanitizedProject.writerPayout;
+                delete sanitizedProject.proofreaderPayout;
+            }
+            res.status(200).json({ assignment: sanitizedProject });
         }
         catch (err) {
             console.error("[AssignmentRoutes] Get error:", err);
