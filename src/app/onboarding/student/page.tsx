@@ -33,6 +33,10 @@ export default function StudentOnboarding() {
         return;
       }
       if (profile) {
+        if (profile.writerInterest && !profile.isOnboarded) {
+          router.replace("/onboarding/writer");
+          return;
+        }
         // Redirect non-student profiles
         if (profile.role !== "customer") {
           router.replace(profile.role === "writer" ? "/onboarding/writer" : "/dashboard");

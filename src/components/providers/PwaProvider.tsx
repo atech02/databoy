@@ -4,12 +4,8 @@ import React, { useEffect } from "react";
 
 export function PwaProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
-    if (
-      typeof window !== "undefined" && 
-      "serviceWorker" in navigator && 
-      process.env.NODE_ENV === "production"
-    ) {
-      window.addEventListener("load", () => {
+    if (typeof window !== "undefined" && "serviceWorker" in navigator) {
+      const registerSw = () => {
         navigator.serviceWorker
           .register("/sw.js")
           .then((registration) => {
@@ -18,7 +14,14 @@ export function PwaProvider({ children }: { children: React.ReactNode }) {
           .catch((error) => {
             console.error("DataBoy PWA Service Worker registration failed:", error);
           });
-      });
+      };
+
+      if (document.readyState === "complete") {
+        registerSw();
+      } else {
+        window.addEventListener("load", registerSw);
+        return () => window.removeEventListener("load", registerSw);
+      }
     }
   }, []);
 

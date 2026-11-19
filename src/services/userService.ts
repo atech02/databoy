@@ -23,6 +23,10 @@ export function normalizeUserProfile(raw: any): UserProfile {
     user.verificationStatus = "pending_review";
     user.writerStatus = "inactive";
     user.isVerifiedWriter = false;
+  } else if (vStatus === "under_review") {
+    user.verificationStatus = "under_review";
+    user.writerStatus = "inactive";
+    user.isVerifiedWriter = false;
   } else {
     user.verificationStatus = (vStatus === "incomplete" || vStatus === "clarification_required" || vStatus === "rejected")
       ? vStatus
@@ -30,6 +34,37 @@ export function normalizeUserProfile(raw: any): UserProfile {
     user.writerStatus = "inactive";
     user.isVerifiedWriter = false;
   }
+
+  user.writerInterest = Boolean(
+    user.writerInterest ||
+    user.role === "writer" ||
+    user.role === "proofreader" ||
+    (vStatus && vStatus !== "draft")
+  );
+  const rawNotifPrefs = user.preferences?.notifications;
+  const resolvedInApp =
+    rawNotifPrefs?.inApp !== undefined
+      ? rawNotifPrefs.inApp !== false
+      : user.preferences?.inAppNotifications !== false;
+  const resolvedEmail =
+    rawNotifPrefs?.email !== undefined
+      ? rawNotifPrefs.email !== false
+      : user.preferences?.emailNotifications !== false;
+  const resolvedPush =
+    rawNotifPrefs?.push !== undefined
+      ? rawNotifPrefs.push === true
+      : user.preferences?.pushNotifications === true;
+
+  user.preferences = {
+    notifications: {
+      inApp: resolvedInApp,
+      email: resolvedEmail,
+      push: resolvedPush,
+    },
+    inAppNotifications: resolvedInApp,
+    emailNotifications: resolvedEmail,
+    pushNotifications: resolvedPush,
+  };
 
   user.competencies = user.competencies ?? (user.academic?.specializations || []);
   user.subjectExpertise = user.subjectExpertise ?? (user.academic?.specializations || []);
@@ -229,7 +264,9 @@ export const userService = {
    * Submits writer application to the backend API
    */
   async applyForWriter(applicationData: {
+    fullName?: string;
     university: string;
+    faculty?: string;
     major: string;
     yearOfStudy: string;
     degreeLevel?: string;
@@ -239,26 +276,37 @@ export const userService = {
     degreeCertificateUrl?: string;
     transcriptUrl?: string;
     cvUrl?: string;
+    certificationsUrl?: string;
+    publicationsUrl?: string;
+    supportingDocsUrl?: string;
     canProofread?: boolean;
+    allowResubmit?: boolean;
   }): Promise<{ success: boolean; message: string; verificationStatus: string }> {
     return apiClient.post("/api/writers/apply", applicationData);
   },
 
   /**
-   * Lists all users who have a verification status (Admin Queue)
+   * Lists all users who have submitted or hold a writer verification status (Admin Queue)
    */
   async listPendingVerifications(): Promise<UserProfile[]> {
-    console.log(`[QUERY_START] collection: ${USERS_COLLECTION} | operation: list | filters: role in [writer, proofreader] | orderBy: none | limit: none`);
+    console.log(`[QUERY_START] collection: ${USERS_COLLECTION} | operation: list | filters: writer applications | orderBy: none | limit: none`);
     try {
       const colRef = collection(db, USERS_COLLECTION);
-      const q = query(colRef, where("role", "in", ["writer", "proofreader"]));
-      const querySnap = await getDocs(q);
+      const querySnap = await getDocs(colRef);
       console.log(`[QUERY_SUCCESS] collection: ${USERS_COLLECTION} | operation: list | resultSize: ${querySnap.size}`);
       const list: UserProfile[] = [];
-      querySnap.forEach((doc) => {
-        const u = doc.data() as UserProfile;
-        if (u.verificationStatus) {
-          list.push(u);
+      querySnap.forEach((d) => {
+        const raw = d.data() as UserProfile;
+        const isApplicant =
+          raw.role === "writer" ||
+          raw.role === "proofreader" ||
+          raw.writerInterest === true ||
+          (raw.verificationStatus &&
+            ["pending_review", "under_review", "clarification_required", "approved", "rejected"].includes(
+              raw.verificationStatus
+            ));
+        if (isApplicant && raw.role !== "admin") {
+          list.push(normalizeUserProfile(raw));
         }
       });
       return list;
@@ -271,8 +319,20 @@ export const userService = {
   /**
    * Approves academic credentials via Express Backend API only (no Cloud Function or direct fallback).
    */
-  async approveVerification(uid: string, _adminProfile: UserProfile): Promise<void> {
-    await apiClient.post(`/api/admin/writers/${uid}/approve`, { grantProofreading: true });
+  async approveVerification(uid: string, _adminProfile: UserProfile, note?: string): Promise<void> {
+    await apiClient.post(`/api/admin/writers/${uid}/approve`, {
+      grantProofreading: true,
+      ...(note ? { note } : {}),
+    });
+  },
+
+  /**
+   * Marks an application as Under Review via Express Backend API only.
+   */
+  async markVerificationUnderReview(uid: string, note?: string): Promise<void> {
+    await apiClient.post(`/api/admin/writers/${uid}/under-review`, {
+      ...(note ? { note } : {}),
+    });
   },
 
   /**

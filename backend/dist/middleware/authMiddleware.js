@@ -43,7 +43,7 @@ export async function authMiddleware(req, res, next) {
             userData.canProofread === true ||
             specialistCapabilities.includes("proofreading");
         const isUnverified = userData.isVerifiedWriter === false ||
-            ["pending_review", "draft", "incomplete", "rejected", "clarification_required"].includes(userData.verificationStatus);
+            ["pending_review", "under_review", "draft", "incomplete", "rejected", "clarification_required"].includes(userData.verificationStatus);
         const isVerifiedWriter = role === "admin" ||
             (!isUnverified &&
                 (userData.isVerifiedWriter === true ||

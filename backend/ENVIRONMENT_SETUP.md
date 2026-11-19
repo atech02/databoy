@@ -155,7 +155,44 @@ DataBoy uses **Cloudflare R2** as its primary private document storage provider 
 
 ---
 
-## 8. Credential Rotation
+## 8. Email & Push Notification Configuration
+
+### A. Transactional Email Provider (Resend or SendGrid)
+
+DataBoy supports non-essential email notifications (payment confirmations, assignment updates, writer application reviews, contract milestones) and essential account notifications.
+
+To enable outbound email delivery on the Express backend (`backend/.env` or hosted secrets manager):
+
+```env
+# Option 1: Resend
+EMAIL_PROVIDER=resend
+RESEND_API_KEY=re_xxxxxxxxxxxxxxxxx
+EMAIL_FROM_ADDRESS=notifications@yourdomain.com
+
+# Option 2: SendGrid
+EMAIL_PROVIDER=sendgrid
+SENDGRID_API_KEY=SG.xxxxxxxxxxxxxxxxx
+EMAIL_FROM_ADDRESS=notifications@yourdomain.com
+
+# Optional public origin for email deep links (defaults to https://databoy-aa871.web.app)
+APP_PUBLIC_ORIGIN=https://databoy-aa871.web.app
+```
+
+- When `EMAIL_PROVIDER` / API keys are not configured, DataBoy **does not simulate or fake email delivery**. Instead, it records `status: "skipped_unconfigured"` in the `emailDeliveries` collection and surfaces the configuration status in the Notification Settings UI.
+- Essential security emails (such as password-reset emails sent via Firebase Authentication's `sendPasswordResetEmail`) are always delivered by Firebase Authentication and cannot be disabled by user notification preferences.
+
+### B. Progressive Web App (PWA) Push Notifications (FCM)
+
+1. In Firebase Console -> **Project Settings -> Cloud Messaging -> Web configuration**, generate or copy your **Web Push certificate (VAPID key pair)**.
+2. Set the public key in `.env.local` (frontend):
+   ```env
+   NEXT_PUBLIC_FIREBASE_VAPID_KEY=Bxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+   ```
+3. Ensure the backend has valid Firebase Admin service account credentials (`FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`) so `adminMessaging.sendEachForMulticast` can dispatch push notifications and automatically prune invalid or expired device tokens from `userDeviceTokens`.
+
+---
+
+## 9. Credential Rotation
 
 1. **Webhook Secret Rotation:** Lipila supports space-separated multiple signatures in `webhook-signature`. During rotation, keep both active in Lipila if dual-signing, deploy the new `LIPILA_WEBHOOK_SECRET` in your hosting secret manager, restart/roll instances, verify signed delivery succeeds, then retire the old signing key in Lipila.
 2. **API Key Rotation:** Generate a new API key in Lipila Dashboard, update `LIPILA_API_KEY` in the hosting provider's secrets store, trigger a zero-downtime rollout, confirm `/api/health` and collection verification pass, and revoke the old key in Lipila.

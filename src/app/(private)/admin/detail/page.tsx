@@ -340,6 +340,8 @@ export default function AdminDetailPage() {
         return <Badge variant="secondary" className="uppercase font-mono text-[10px]">Draft</Badge>;
       case "pending_review":
         return <Badge variant="warning" className="uppercase font-mono text-[10px]">Pending Review</Badge>;
+      case "under_review":
+        return <Badge variant="info" className="uppercase font-mono text-[10px]">Under Review</Badge>;
       case "clarification_required":
         return <Badge variant="info" className="uppercase font-mono text-[10px]">Clarification Needed</Badge>;
       case "approved":
@@ -379,7 +381,16 @@ export default function AdminDetailPage() {
     );
   }
 
-  const isExpert = userProfile.role === "writer" || userProfile.role === "proofreader";
+  const isExpert =
+    userProfile.role === "writer" ||
+    userProfile.role === "proofreader" ||
+    userProfile.writerInterest === true ||
+    Boolean(
+      userProfile.verificationStatus &&
+        ["pending_review", "under_review", "clarification_required", "approved", "rejected"].includes(
+          userProfile.verificationStatus
+        )
+    );
 
   return (
     <div className="flex flex-col gap-6 max-w-5xl mx-auto">

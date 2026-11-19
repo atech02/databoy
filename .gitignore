@@ -46,4 +46,10 @@ next-env.d.ts
 # firebase
 .firebase/
 .jre21/
+firestore-debug.log
+firebase-debug.log
+ui-debug.log
+pubsub-debug.log
+*-debug.log
+
 

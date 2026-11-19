@@ -18,7 +18,7 @@ export default function LegacyOnboardingRouter() {
           router.replace("/dashboard");
         } else {
           // Silent routing to role-specific onboarding screens
-          if (profile.role === "writer") {
+          if (profile.role === "writer" || profile.writerInterest) {
             router.replace("/onboarding/writer");
           } else {
             router.replace("/onboarding/student");

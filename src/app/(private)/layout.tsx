@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
-import { useNotifications } from "@/hooks/useNotifications";
+import { useNotifications, formatNotificationTimestamp, normalizeNotificationUrl } from "@/hooks/useNotifications";
 import { ProtectedRoute } from "@/components/providers/ProtectedRoute";
 import { Button } from "@/components/ui/Button";
 
@@ -18,6 +18,7 @@ export default function PrivateLayout({ children }: { children: React.ReactNode 
   const pathname = usePathname();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
+  const [notifFilter, setNotifFilter] = useState<"all" | "unread">("all");
   const [mounted, setMounted] = useState(false);
   const [isMobile, setIsMobile] = useState(true);
   const notifRef = useRef<HTMLDivElement>(null);
@@ -89,29 +90,43 @@ export default function PrivateLayout({ children }: { children: React.ReactNode 
   };
 
   let navItems: { label: string; href: string }[] = [];
+  const isApprovedWriter =
+    (profile?.role === "writer" || profile?.role === "proofreader") &&
+    profile?.status === "active" &&
+    profile?.verificationStatus === "approved" &&
+    profile?.isVerifiedWriter === true &&
+    (profile?.role === "proofreader" || profile?.writerStatus === "active");
+  const hasAppliedWriter =
+    profile?.verificationStatus &&
+    ["pending_review", "under_review", "clarification_required", "approved", "rejected"].includes(
+      profile.verificationStatus
+    );
 
-  if (profile?.role === "customer") {
-    navItems = [
-      { label: "Home", href: "/dashboard" },
-      { label: "Assist with Assignment", href: "/projects/upload" },
-      { label: "Assist with Research", href: "/research/request" },
-      { label: "Profile", href: "/profile" },
-      { label: "Settings", href: "/settings" },
-    ];
-  } else if (profile?.role === "writer") {
-    navItems = [
-      { label: "Home", href: "/dashboard" },
-      { label: "Verification", href: "/verification" },
-      { label: "Profile", href: "/profile" },
-      { label: "Settings", href: "/settings" },
-    ];
-  } else if (profile?.role === "admin") {
+  if (profile?.role === "admin") {
     navItems = [
       { label: "Dashboard", href: "/dashboard" },
       { label: "Assignments", href: "/admin?tab=assignments" },
       { label: "Verification", href: "/admin?tab=verifications" },
       { label: "Users", href: "/admin?tab=overview" },
       { label: "Reports", href: "/admin?tab=overview" },
+      { label: "Settings", href: "/settings" },
+    ];
+  } else if (isApprovedWriter) {
+    navItems = [
+      { label: "Home", href: "/dashboard" },
+      { label: "Verification", href: "/verification" },
+      { label: "Profile", href: "/profile" },
+      { label: "Settings", href: "/settings" },
+    ];
+  } else if (profile?.role === "customer" || profile?.role === "writer") {
+    navItems = [
+      { label: "Home", href: "/dashboard" },
+      { label: "Assist with Assignment", href: "/projects/upload" },
+      { label: "Assist with Research", href: "/research/request" },
+      ...(profile?.writerInterest || hasAppliedWriter || profile?.role === "writer"
+        ? [{ label: hasAppliedWriter ? "Writer Status" : "Apply as Writer", href: "/verification" }]
+        : []),
+      { label: "Profile", href: "/profile" },
       { label: "Settings", href: "/settings" },
     ];
   } else {
@@ -182,49 +197,149 @@ export default function PrivateLayout({ children }: { children: React.ReactNode 
                     )}
                   </button>
 
-                  {/* Notification Dropdown */}
+                  {/* Notification Centre Dropdown */}
                   {notifOpen && (
-                    <div className="absolute right-0 top-full mt-2 w-80 z-50 rounded-xl border border-border/50 shadow-2xl bg-card overflow-hidden">
+                    <div className="absolute right-0 top-full mt-2 w-80 sm:w-96 z-50 rounded-xl border border-border/50 shadow-2xl bg-card overflow-hidden">
                       <div className="flex items-center justify-between px-4 py-3 border-b border-border/30 bg-secondary/20">
-                        <span className="text-xs font-black uppercase tracking-wider text-foreground">Notifications</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-black uppercase tracking-wider text-foreground">
+                            Notification Centre
+                          </span>
+                          {unreadCount > 0 && (
+                            <span className="text-[10px] font-bold bg-primary/15 text-primary px-2 py-0.5 rounded-full">
+                              {unreadCount} new
+                            </span>
+                          )}
+                        </div>
                         {unreadCount > 0 && (
                           <button
                             onClick={() => markAllRead()}
-                            className="text-[10px] font-bold text-primary hover:text-primary/80 cursor-pointer"
+                            className="text-[11px] font-bold text-primary hover:text-primary/80 cursor-pointer"
                           >
-                            Mark all read
+                            Mark all as read
                           </button>
                         )}
                       </div>
-                      <div className="max-h-80 overflow-y-auto">
-                        {notifications.length === 0 ? (
-                          <div className="p-6 text-center text-xs text-muted-foreground">No notifications yet.</div>
-                        ) : (
-                          notifications.slice(0, 15).map(n => (
-                            <div
-                              key={n.id}
-                              className={`px-4 py-3 border-b border-border/20 cursor-pointer hover:bg-secondary/30 transition-colors ${
-                                !n.read ? "bg-primary/5" : ""
-                              }`}
-                              onClick={async () => {
-                                await markRead(n.id);
-                                setNotifOpen(false);
-                                if (n.relatedUrl) router.push(n.relatedUrl);
-                              }}
-                            >
-                              <div className="flex items-start gap-2">
-                                {!n.read && <span className="w-1.5 h-1.5 rounded-full bg-primary mt-1.5 shrink-0" />}
-                                <div className={`flex flex-col gap-0.5 ${n.read ? "pl-3.5" : ""}`}>
-                                  <span className="text-[11px] font-bold text-foreground">{n.title}</span>
-                                  <span className="text-[10px] text-muted-foreground leading-relaxed">{n.message}</span>
-                                  <span className="text-[9px] text-muted-foreground/60 font-mono mt-0.5">
-                                    {new Date(n.createdAt).toLocaleString()}
-                                  </span>
+
+                      {/* Filter Tabs: All / Unread */}
+                      <div className="flex items-center justify-between px-4 py-2 border-b border-border/20 bg-background/60 text-[11px]">
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setNotifFilter("all")}
+                            className={`px-2.5 py-1 rounded-md font-bold cursor-pointer transition-colors ${
+                              notifFilter === "all"
+                                ? "bg-primary text-primary-foreground"
+                                : "text-muted-foreground hover:text-foreground"
+                            }`}
+                          >
+                            All ({notifications.length})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setNotifFilter("unread")}
+                            className={`px-2.5 py-1 rounded-md font-bold cursor-pointer transition-colors ${
+                              notifFilter === "unread"
+                                ? "bg-primary text-primary-foreground"
+                                : "text-muted-foreground hover:text-foreground"
+                            }`}
+                          >
+                            Unread ({unreadCount})
+                          </button>
+                        </div>
+                        <Link
+                          href="/profile"
+                          onClick={() => setNotifOpen(false)}
+                          className="text-[10px] font-semibold text-muted-foreground hover:text-primary"
+                        >
+                          Preferences ⚙
+                        </Link>
+                      </div>
+
+                      <div className="max-h-96 overflow-y-auto divide-y divide-border/20">
+                        {(() => {
+                          const visibleNotifs =
+                            notifFilter === "unread"
+                              ? notifications.filter((n) => !n.read)
+                              : notifications;
+
+                          if (visibleNotifs.length === 0) {
+                            return (
+                              <div className="p-8 text-center text-xs text-muted-foreground">
+                                {notifFilter === "unread"
+                                  ? "You have no unread notifications."
+                                  : "No notifications yet."}
+                              </div>
+                            );
+                          }
+
+                          return visibleNotifs.slice(0, 25).map((n) => {
+                            const targetHref = normalizeNotificationUrl(n.relatedUrl || n.link);
+                            return (
+                              <div
+                                key={n.id}
+                                className={`px-4 py-3 hover:bg-secondary/30 transition-colors ${
+                                  !n.read ? "bg-primary/5" : ""
+                                }`}
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <div
+                                    className="flex items-start gap-2.5 flex-1 cursor-pointer"
+                                    onClick={async () => {
+                                      if (!n.read) {
+                                        await markRead(n.id);
+                                      }
+                                      setNotifOpen(false);
+                                      if (targetHref) router.push(targetHref);
+                                    }}
+                                  >
+                                    {!n.read ? (
+                                      <span className="w-2 h-2 rounded-full bg-primary mt-1.5 shrink-0" />
+                                    ) : (
+                                      <span className="w-2 h-2 rounded-full bg-border mt-1.5 shrink-0" />
+                                    )}
+                                    <div className="flex flex-col gap-0.5 flex-1">
+                                      <span
+                                        className={`text-xs ${
+                                          !n.read ? "font-extrabold text-foreground" : "font-semibold text-foreground/85"
+                                        }`}
+                                      >
+                                        {n.title}
+                                      </span>
+                                      <span className="text-[11px] text-muted-foreground leading-relaxed">
+                                        {n.message}
+                                      </span>
+                                      <div className="flex items-center gap-3 mt-1">
+                                        <span className="text-[10px] text-muted-foreground/70 font-mono">
+                                          {formatNotificationTimestamp(n.createdAt)}
+                                        </span>
+                                        {targetHref && (
+                                          <span className="text-[10px] font-bold text-primary hover:underline">
+                                            Open &rarr;
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {!n.read && (
+                                    <button
+                                      type="button"
+                                      onClick={async (e) => {
+                                        e.stopPropagation();
+                                        await markRead(n.id);
+                                      }}
+                                      title="Mark as read"
+                                      className="text-[10px] font-bold text-primary hover:text-primary/80 px-1.5 py-0.5 rounded bg-primary/10 shrink-0 cursor-pointer"
+                                    >
+                                      Read
+                                    </button>
+                                  )}
                                 </div>
                               </div>
-                            </div>
-                          ))
-                        )}
+                            );
+                          });
+                        })()}
                       </div>
                     </div>
                   )}

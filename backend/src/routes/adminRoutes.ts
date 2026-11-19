@@ -1,5 +1,5 @@
 import { Router, Request, Response } from "express";
-import { adminDb } from "../config/firebaseAdmin.js";
+import { adminAuth, adminDb } from "../config/firebaseAdmin.js";
 import { authMiddleware } from "../middleware/authMiddleware.js";
 import { requireRole } from "../middleware/roleGuard.js";
 import { logAuditEvent } from "../services/auditService.js";
@@ -13,64 +13,160 @@ const router = Router();
 router.use(authMiddleware, requireRole("admin"));
 
 /**
+ * Helper to synchronize Firebase Auth custom claims safely.
+ * Returns success/error metadata so partial failures can be handled safely.
+ */
+async function syncFirebaseCustomClaims(
+  uid: string,
+  claims: Record<string, any>
+): Promise<{ synced: boolean; skippedInTest?: boolean; error?: string }> {
+  const isTestEnv =
+    (process.env.NODE_ENV || "").trim().toLowerCase() === "test" ||
+    Boolean(process.env.FIRESTORE_EMULATOR_HOST?.trim());
+  try {
+    await adminAuth.setCustomUserClaims(uid, claims);
+    return { synced: true };
+  } catch (err: any) {
+    if (isTestEnv) {
+      return { synced: false, skippedInTest: true };
+    }
+    console.error(`[AdminRoutes] Failed to synchronize Firebase Auth custom claims for ${uid}:`, err);
+    return { synced: false, error: err?.message || "Custom claim sync failed" };
+  }
+}
+
+/**
  * POST /api/admin/writers/:uid/approve
  * Admin approves a writer application, elevating their role to writer.
+ * Runs inside a Firestore transaction and synchronizes Firebase Auth custom claims.
+ * If custom-claim synchronization fails in a non-test environment, rolls back Firestore role escalation.
  */
 router.post("/writers/:uid/approve", async (req: Request, res: Response): Promise<void> => {
   try {
     const uid = req.params.uid as string;
-    const { grantProofreading } = req.body;
+    const { grantProofreading, note } = req.body || {};
     const user = req.user!;
     const userRef = adminDb.collection("users").doc(uid);
     const now = new Date().toISOString();
-
-    const snap = await userRef.get();
-    if (!snap.exists) {
-      res.status(404).json({ error: "User not found" });
-      return;
-    }
 
     const capabilities = ["writing"];
     if (grantProofreading) {
       capabilities.push("proofreading");
     }
 
-    const currentData = snap.data() || {};
-    const performanceInit = {
-      reputation: currentData.reputation ?? 0,
-      writingRating: currentData.writingRating ?? 0,
-      proofreadingRating: currentData.proofreadingRating ?? 0,
-      overallRating: currentData.overallRating ?? 0,
-      writingCompletedTasks: currentData.writingCompletedTasks ?? 0,
-      proofreadingCompletedTasks: currentData.proofreadingCompletedTasks ?? 0,
-      writingOnTimeRate: currentData.writingOnTimeRate ?? 100,
-      proofreadingOnTimeRate: currentData.proofreadingOnTimeRate ?? 100,
-      writingRejectionRate: currentData.writingRejectionRate ?? 0,
-      proofreadingRejectionRate: currentData.proofreadingRejectionRate ?? 0,
-      verifiedComplaintCount: currentData.verifiedComplaintCount ?? 0,
-      performanceReviewStatus: currentData.performanceReviewStatus ?? "unrated",
-      allocationPreference: currentData.allocationPreference ?? "normal", // Provisional normal tier
-      ratingHistory: Array.isArray(currentData.ratingHistory) ? currentData.ratingHistory : [],
-    };
+    const txResult = await adminDb.runTransaction(async (transaction) => {
+      const snap = await transaction.get(userRef);
+      if (!snap.exists) {
+        throw new Error("USER_NOT_FOUND");
+      }
 
-    await userRef.update({
+      const currentData = snap.data() || {};
+      if (currentData.role === "admin") {
+        throw new Error("CANNOT_MODIFY_ADMIN");
+      }
+      if (currentData.status === "suspended") {
+        throw new Error("USER_SUSPENDED");
+      }
+
+      const previousStatus = currentData.verificationStatus || "draft";
+      const previousRole = currentData.role || "customer";
+
+      const performanceInit = {
+        reputation: currentData.reputation ?? 0,
+        writingRating: currentData.writingRating ?? 0,
+        proofreadingRating: currentData.proofreadingRating ?? 0,
+        overallRating: currentData.overallRating ?? 0,
+        writingCompletedTasks: currentData.writingCompletedTasks ?? 0,
+        proofreadingCompletedTasks: currentData.proofreadingCompletedTasks ?? 0,
+        writingOnTimeRate: currentData.writingOnTimeRate ?? 100,
+        proofreadingOnTimeRate: currentData.proofreadingOnTimeRate ?? 100,
+        writingRejectionRate: currentData.writingRejectionRate ?? 0,
+        proofreadingRejectionRate: currentData.proofreadingRejectionRate ?? 0,
+        verifiedComplaintCount: currentData.verifiedComplaintCount ?? 0,
+        performanceReviewStatus: currentData.performanceReviewStatus ?? "unrated",
+        allocationPreference: currentData.allocationPreference ?? "normal",
+        ratingHistory: Array.isArray(currentData.ratingHistory) ? currentData.ratingHistory : [],
+      };
+
+      const statusHistory = Array.isArray(currentData.statusHistory) ? [...currentData.statusHistory] : [];
+      statusHistory.push({
+        status: "approved",
+        actorId: user.uid,
+        actorName: user.email || "Administrator",
+        actorRole: "admin",
+        timestamp: now,
+        note:
+          typeof note === "string" && note.trim()
+            ? note.trim()
+            : `Writer application approved${grantProofreading ? " (with proofreading certification)" : ""}.`,
+      });
+
+      transaction.update(userRef, {
+        role: "writer",
+        status: "active",
+        writerStatus: "active",
+        verificationStatus: "approved",
+        isVerifiedWriter: true,
+        isOnboarded: true,
+        canProofread: !!grantProofreading,
+        specialistCapabilities: capabilities,
+        ...performanceInit,
+        statusHistory,
+        verifiedAt: now,
+        updatedAt: now,
+      });
+
+      return {
+        previousStatus,
+        previousRole,
+        previousWriterStatus: currentData.writerStatus || "inactive",
+        previousIsVerifiedWriter: Boolean(currentData.isVerifiedWriter),
+        previousCanProofread: Boolean(currentData.canProofread),
+        previousStatusHistory: Array.isArray(currentData.statusHistory) ? currentData.statusHistory : [],
+      };
+    });
+
+    // Synchronize Firebase Authentication custom claims
+    const claimResult = await syncFirebaseCustomClaims(uid, {
       role: "writer",
-      status: "active",
-      verificationStatus: "approved",
       isVerifiedWriter: true,
       canProofread: !!grantProofreading,
-      specialistCapabilities: capabilities,
-      ...performanceInit,
-      verifiedAt: now,
-      updatedAt: now,
     });
+
+    // Partial failure safety: if custom-claim sync fails in production/staging, roll back Firestore authorization state
+    if (!claimResult.synced && !claimResult.skippedInTest) {
+      await userRef.update({
+        role: txResult.previousRole,
+        writerStatus: txResult.previousWriterStatus,
+        verificationStatus: txResult.previousStatus,
+        isVerifiedWriter: txResult.previousIsVerifiedWriter,
+        canProofread: txResult.previousCanProofread,
+        statusHistory: txResult.previousStatusHistory,
+        updatedAt: new Date().toISOString(),
+      });
+      res.status(502).json({
+        error: "Failed to synchronize Firebase Authentication custom claims; approval rolled back to maintain consistency.",
+        details: claimResult.error,
+      });
+      return;
+    }
 
     await logAuditEvent({
       action: "writer_approved",
       actorId: user.uid,
       actorRole: user.role,
       targetId: uid,
-      details: { grantProofreading: !!grantProofreading },
+      details: {
+        applicantUid: uid,
+        applicationId: uid,
+        previousStatus: txResult.previousStatus,
+        newStatus: "approved",
+        previousRole: txResult.previousRole,
+        newRole: "writer",
+        grantProofreading: !!grantProofreading,
+        claimsSynced: claimResult.synced,
+        note: note || null,
+      },
       ip: req.ip,
     });
 
@@ -79,26 +175,45 @@ router.post("/writers/:uid/approve", async (req: Request, res: Response): Promis
       title: "Writer Application Approved",
       message: `Congratulations! Your writer application has been approved.${
         grantProofreading ? " You have also been certified as a Proofreader." : ""
-      }`,
-      type: "system",
-      link: "/app/writer",
+      } You can now access the Writer Dashboard and claim assignments.`,
+      type: "writer_application",
+      relatedType: "writer_application",
+      relatedId: uid,
+      link: "/dashboard",
+      essential: true,
     });
 
-    res.status(200).json({ success: true, message: "Writer approved successfully" });
+    res.status(200).json({
+      success: true,
+      message: "Writer approved successfully",
+      claimsSynced: claimResult.synced,
+    });
   } catch (err: any) {
+    if (err?.message === "USER_NOT_FOUND") {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+    if (err?.message === "CANNOT_MODIFY_ADMIN") {
+      res.status(400).json({ error: "Cannot convert an administrator account via writer approval" });
+      return;
+    }
+    if (err?.message === "USER_SUSPENDED") {
+      res.status(400).json({ error: "Cannot approve a suspended user account" });
+      return;
+    }
     console.error("[AdminRoutes] Approve writer error:", err);
     res.status(500).json({ error: "Failed to approve writer" });
   }
 });
 
 /**
- * POST /api/admin/writers/:uid/reject
- * Admin rejects a writer application.
+ * POST /api/admin/writers/:uid/under-review
+ * Admin marks a submitted writer application as currently Under Review.
  */
-router.post("/writers/:uid/reject", async (req: Request, res: Response): Promise<void> => {
+router.post("/writers/:uid/under-review", async (req: Request, res: Response): Promise<void> => {
   try {
     const uid = req.params.uid as string;
-    const { reason } = req.body;
+    const { note } = req.body || {};
     const user = req.user!;
     const userRef = adminDb.collection("users").doc(uid);
     const now = new Date().toISOString();
@@ -109,11 +224,100 @@ router.post("/writers/:uid/reject", async (req: Request, res: Response): Promise
       return;
     }
 
+    const currentData = snap.data() || {};
+    const statusHistory = Array.isArray(currentData.statusHistory) ? [...currentData.statusHistory] : [];
+    statusHistory.push({
+      status: "under_review",
+      actorId: user.uid,
+      actorName: user.email || "Administrator",
+      actorRole: "admin",
+      timestamp: now,
+      note: typeof note === "string" && note.trim() ? note.trim() : "Application placed under administrative review.",
+    });
+
     await userRef.update({
+      verificationStatus: "under_review",
+      statusHistory,
+      updatedAt: now,
+    });
+
+    await logAuditEvent({
+      action: "writer_under_review",
+      actorId: user.uid,
+      actorRole: user.role,
+      targetId: uid,
+      details: { note: note || null },
+      ip: req.ip,
+    });
+
+    await createNotification({
+      userId: uid,
+      title: "Writer Application Under Review",
+      message: "An administrator is currently reviewing your submitted academic credentials.",
+      type: "writer_application",
+      relatedType: "writer_application",
+      relatedId: uid,
+      link: "/verification",
+    });
+
+    res.status(200).json({ success: true, verificationStatus: "under_review" });
+  } catch (err: any) {
+    console.error("[AdminRoutes] Under review writer error:", err);
+    res.status(500).json({ error: "Failed to update application status to under review" });
+  }
+});
+
+/**
+ * POST /api/admin/writers/:uid/reject
+ * Admin rejects a writer application, preserving customer access.
+ */
+router.post("/writers/:uid/reject", async (req: Request, res: Response): Promise<void> => {
+  try {
+    const uid = req.params.uid as string;
+    const { reason } = req.body || {};
+    const user = req.user!;
+    const userRef = adminDb.collection("users").doc(uid);
+    const now = new Date().toISOString();
+
+    const snap = await userRef.get();
+    if (!snap.exists) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+
+    const currentData = snap.data() || {};
+    const rejectionReason = typeof reason === "string" && reason.trim() ? reason.trim() : "Did not meet criteria";
+    const prevRejections = Number(currentData.previousRejectionsCount || 0) + 1;
+
+    const statusHistory = Array.isArray(currentData.statusHistory) ? [...currentData.statusHistory] : [];
+    statusHistory.push({
+      status: "rejected",
+      actorId: user.uid,
+      actorName: user.email || "Administrator",
+      actorRole: "admin",
+      timestamp: now,
+      note: `Application rejected: ${rejectionReason}`,
+    });
+
+    // Preserve customer role if applicant was not an admin
+    const preservedRole = currentData.role === "admin" ? "admin" : "customer";
+
+    await userRef.update({
+      role: preservedRole,
       verificationStatus: "rejected",
-      rejectionReason: reason || "Did not meet criteria",
+      writerStatus: "inactive",
+      isVerifiedWriter: false,
+      rejectionReason,
+      previousRejectionsCount: prevRejections,
+      statusHistory,
       rejectedAt: now,
       updatedAt: now,
+    });
+
+    await syncFirebaseCustomClaims(uid, {
+      role: preservedRole,
+      isVerifiedWriter: false,
+      canProofread: false,
     });
 
     await logAuditEvent({
@@ -121,15 +325,19 @@ router.post("/writers/:uid/reject", async (req: Request, res: Response): Promise
       actorId: user.uid,
       actorRole: user.role,
       targetId: uid,
-      details: { reason },
+      details: { reason: rejectionReason, previousRejectionsCount: prevRejections },
       ip: req.ip,
     });
 
     await createNotification({
       userId: uid,
       title: "Writer Application Update",
-      message: `Your application could not be approved at this time: ${reason || "Criteria not met"}`,
-      type: "system",
+      message: `Your writer application could not be approved at this time: ${rejectionReason}`,
+      type: "writer_application",
+      relatedType: "writer_application",
+      relatedId: uid,
+      link: "/verification",
+      essential: true,
     });
 
     res.status(200).json({ success: true, message: "Writer application rejected" });
@@ -788,6 +996,9 @@ router.post("/writers/:uid/clarification", async (req: Request, res: Response): 
       const history = Array.isArray(currentData.statusHistory) ? [...currentData.statusHistory] : [];
       history.push({
         status: "clarification_required",
+        actorId: user.uid,
+        actorName: user.email || "Administrator",
+        actorRole: "admin",
         timestamp: now,
         adminId: user.uid,
         adminName: user.email,
@@ -798,6 +1009,7 @@ router.post("/writers/:uid/clarification", async (req: Request, res: Response): 
         verificationStatus: "clarification_required",
         isVerifiedWriter: false,
         clarificationNote: messageNote,
+        rejectionReason: messageNote,
         previousClarificationsCount: prevCount,
         statusHistory: history,
         updatedAt: now,

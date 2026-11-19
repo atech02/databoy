@@ -150,7 +150,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const sendPasswordReset = async (email: string) => {
     await apiClient.post("/api/auth/password-recovery-guard", { email }, { requiresAuth: false });
-    await sendPasswordResetEmail(auth, email);
+    const origin =
+      typeof window !== "undefined" && window.location?.origin
+        ? window.location.origin
+        : "https://databoy-aa871.web.app";
+    try {
+      await sendPasswordResetEmail(auth, email, {
+        url: `${origin}/reset-password`,
+        handleCodeInApp: false,
+      });
+    } catch (err: any) {
+      // Do not reveal whether an email address is registered (prevent account enumeration)
+      if (err?.code === "auth/user-not-found") {
+        return;
+      }
+      // If actionCodeSettings domain isn't whitelisted in local dev, fallback cleanly to default template
+      if (err?.code === "auth/unauthorized-continue-uri" || err?.code === "auth/invalid-continue-uri") {
+        try {
+          await sendPasswordResetEmail(auth, email);
+          return;
+        } catch (innerErr: any) {
+          if (innerErr?.code === "auth/user-not-found") return;
+          throw innerErr;
+        }
+      }
+      throw err;
+    }
   };
 
   const registerWithEmail = async (email: string, password: string, name: string, role: string) => {
@@ -162,19 +187,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       await updateProfile(userCredential.user, { displayName: name });
       
-      // Fix 1 — Writer/Proofreader roles need verificationStatus in the initial
-      // document, otherwise the Firestore allow create rule denies the write
-      // (rule requires role == 'customer' OR verificationStatus in ['pending_review', 'draft', 'incomplete']).
-      const isSpecialist = role !== "customer" && role !== "admin";
+      // Self-registration always creates a 'customer' account per security policy.
+      // Selecting 'writer' during registration records writerInterest: true so the
+      // user can complete onboarding and submit a formal writer application for admin approval.
+      const wantsWriter = role !== "customer" && role !== "admin";
       const userProf = await userService.createUserProfile({
         uid: userCredential.user.uid,
         email,
         displayName: name,
-        role: role as any,
+        role: "customer",
         status: "active",
         isOnboarded: false,
         profileCompletion: 20,
-        ...(isSpecialist ? { verificationStatus: "draft" as any } : {})
+        writerInterest: wantsWriter,
+        ...(wantsWriter ? { verificationStatus: "draft" as any } : {})
       });
       setProfile(userProf);
       justRegisteredRef.current = false;

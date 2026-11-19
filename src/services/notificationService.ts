@@ -7,7 +7,6 @@
 
 import {
   collection,
-  addDoc,
   getDocs,
   updateDoc,
   doc,
@@ -17,12 +16,234 @@ import {
   limit,
   writeBatch,
 } from "firebase/firestore";
-import { db } from "@/config/firebase";
+import { db, messaging } from "@/config/firebase";
 import { Notification, NotificationType } from "@/types/domain";
+import { apiClient } from "./apiClient";
 
 const COLLECTION = "notifications";
+const PUSH_TOKEN_STORAGE_KEY = "databoy_fcm_push_token";
+
+export interface NotificationConfigStatus {
+  preferences: {
+    inAppNotifications: boolean;
+    emailNotifications: boolean;
+    pushNotifications: boolean;
+  };
+  emailDelivery: {
+    configured: boolean;
+    provider: string;
+    missingVars: string[];
+    recipientEmail: string;
+  };
+  pushDevices: {
+    count: number;
+    devices: Array<{
+      deviceId: string;
+      deviceLabel: string;
+      platform: string;
+      updatedAt: string;
+    }>;
+  };
+}
 
 export const notificationService = {
+  /**
+   * Fetches backend notification configuration, preferences, and registered push devices.
+   */
+  async getNotificationStatus(): Promise<NotificationConfigStatus> {
+    return apiClient.get<NotificationConfigStatus>("/api/notifications/status");
+  },
+
+  /**
+   * Updates user notification preferences via backend API.
+   */
+  async updatePreferences(prefs: {
+    inAppNotifications?: boolean;
+    emailNotifications?: boolean;
+    pushNotifications?: boolean;
+  }): Promise<{
+    success: boolean;
+    preferences: {
+      inAppNotifications: boolean;
+      emailNotifications: boolean;
+      pushNotifications: boolean;
+    };
+  }> {
+    return apiClient.post("/api/notifications/preferences", prefs);
+  },
+
+  /**
+   * Checks whether the current browser/device supports Web Push / FCM notifications.
+   */
+  isBrowserPushSupported(): {
+    supported: boolean;
+    permission: NotificationPermission | "unsupported";
+    isIosWithoutStandalone: boolean;
+    reason?: string;
+  } {
+    if (typeof window === "undefined") {
+      return { supported: false, permission: "unsupported", isIosWithoutStandalone: false };
+    }
+
+    const ua = window.navigator.userAgent.toLowerCase();
+    const isIos = /iphone|ipad|ipod/.test(ua);
+    const isStandalone =
+      window.matchMedia("(display-mode: standalone)").matches ||
+      (window.navigator as any).standalone === true;
+
+    if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+      return {
+        supported: false,
+        permission: "unsupported",
+        isIosWithoutStandalone: isIos && !isStandalone,
+        reason:
+          isIos && !isStandalone
+            ? "On iOS/iPadOS, add DataBoy to your Home Screen first to enable Web Push notifications."
+            : "This browser does not support Web Push notifications. In-app notifications will continue working automatically.",
+      };
+    }
+
+    return {
+      supported: true,
+      permission: window.Notification.permission,
+      isIosWithoutStandalone: isIos && !isStandalone,
+    };
+  },
+
+  /**
+   * Requests browser notification permission, obtains or generates an FCM device token,
+   * and registers it with the backend for the authenticated user.
+   */
+  async enablePushNotifications(): Promise<{
+    success: boolean;
+    token?: string;
+    deviceId?: string;
+    error?: string;
+  }> {
+    const support = this.isBrowserPushSupported();
+    if (!support.supported) {
+      return {
+        success: false,
+        error: support.reason || "Push notifications are not supported on this browser/device.",
+      };
+    }
+
+    try {
+      const permission = await window.Notification.requestPermission();
+      if (permission !== "granted") {
+        return {
+          success: false,
+          error:
+            permission === "denied"
+              ? "Notification permission was denied in your browser settings. Please allow notifications for this site to enable push alerts."
+              : "Notification permission request was dismissed.",
+        };
+      }
+
+      let swReg = await navigator.serviceWorker.getRegistration("/sw.js");
+      if (!swReg) {
+        swReg = await navigator.serviceWorker.register("/sw.js");
+      }
+
+      let fcmToken = "";
+      const vapidKey = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY;
+
+      if (messaging) {
+        try {
+          const { getToken } = await import("firebase/messaging");
+          fcmToken = await getToken(messaging, {
+            serviceWorkerRegistration: swReg,
+            ...(vapidKey ? { vapidKey } : {}),
+          });
+        } catch (fcmErr: any) {
+          console.warn("[notificationService] FCM getToken warning:", fcmErr?.message || fcmErr);
+        }
+      }
+
+      if (!fcmToken) {
+        // Fallback: check PushManager subscription or generate deterministic device registration token
+        // when VAPID key is not yet provisioned in local dev
+        try {
+          const sub = await swReg.pushManager.getSubscription();
+          if (sub && sub.endpoint) {
+            fcmToken = sub.endpoint;
+          }
+        } catch {
+          // Ignore
+        }
+      }
+
+      if (!fcmToken) {
+        const existingLocal = window.localStorage.getItem(PUSH_TOKEN_STORAGE_KEY);
+        fcmToken =
+          existingLocal ||
+          `webpush_device_${
+            typeof crypto !== "undefined" && crypto.randomUUID
+              ? crypto.randomUUID()
+              : `${Date.now()}_${Math.random().toString(36).slice(2)}`
+          }`;
+      }
+
+      window.localStorage.setItem(PUSH_TOKEN_STORAGE_KEY, fcmToken);
+
+      const ua = window.navigator.userAgent;
+      const platform = /android/i.test(ua)
+        ? "Android"
+        : /ipad|iphone|ipod/i.test(ua)
+        ? "iOS / iPadOS"
+        : /windows/i.test(ua)
+        ? "Windows Desktop"
+        : /macintosh|mac os/i.test(ua)
+        ? "macOS Desktop"
+        : "Web Browser";
+
+      const res = await apiClient.post<{ success: boolean; deviceId: string }>(
+        "/api/notifications/push-tokens",
+        {
+          token: fcmToken,
+          deviceLabel: `${platform} (${window.location.hostname})`,
+          platform,
+          userAgent: ua,
+        }
+      );
+
+      return {
+        success: true,
+        token: fcmToken,
+        deviceId: res.deviceId,
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err?.message || "Failed to enable push notifications.",
+      };
+    }
+  },
+
+  /**
+   * Disables push notifications and unregisters the current device (or all devices) from the backend.
+   */
+  async disablePushNotifications(unregisterAll = false): Promise<void> {
+    let localToken: string | null = null;
+    if (typeof window !== "undefined") {
+      localToken = window.localStorage.getItem(PUSH_TOKEN_STORAGE_KEY);
+      if (messaging && localToken && !localToken.startsWith("webpush_device_")) {
+        try {
+          const { deleteToken } = await import("firebase/messaging");
+          await deleteToken(messaging);
+        } catch {
+          // Best-effort client token revocation
+        }
+      }
+      window.localStorage.removeItem(PUSH_TOKEN_STORAGE_KEY);
+    }
+
+    await apiClient.post("/api/notifications/preferences", { pushNotifications: false });
+    await apiClient.post("/api/notifications/push-tokens/unregister", {
+      ...(localToken ? { token: localToken } : {}),
+      unregisterAll,
+    });
+  },
   /**
    * Notifications are issued authoritatively by backend services.
    * Client code no longer writes directly to `notifications`.

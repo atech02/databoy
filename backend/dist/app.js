@@ -10,6 +10,7 @@ import { createProofreadingRouter } from "./routes/proofreadingRoutes.js";
 import { createPaymentRouter } from "./routes/paymentRoutes.js";
 import { createAuthRouter } from "./routes/authRoutes.js";
 import { createUploadRouter } from "./routes/uploadRoutes.js";
+import { createNotificationRouter } from "./routes/notificationRoutes.js";
 import { validateWebhookConfig } from "./services/webhookAuth.js";
 import { lipilaService } from "./services/lipilaService.js";
 import { isLipilaProductionEnv, validateLipilaConfig, validateR2Config, } from "./config/env.js";
@@ -123,6 +124,7 @@ export function createApp(options = {}) {
     app.use("/api/admin", adminRoutes);
     app.use("/api/proofreading", createProofreadingRouter(limiters));
     app.use("/api/payments", createPaymentRouter(limiters));
+    app.use("/api/notifications", createNotificationRouter(limiters));
     // 404 handler
     app.use((_req, res) => {
         res.status(404).json({ error: "Endpoint not found" });

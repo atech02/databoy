@@ -11,7 +11,9 @@ import { createNotification } from "../services/notificationService.js";
 const noopMiddleware: RequestHandler = (_req, _res, next) => next();
 
 const writerApplicationSchema = z.object({
+  fullName: z.string().min(2).max(120).optional(),
   university: z.string().min(2),
+  faculty: z.string().optional(),
   major: z.string().min(2),
   yearOfStudy: z.string().min(1),
   degreeLevel: z.string().default("degree"),
@@ -21,6 +23,9 @@ const writerApplicationSchema = z.object({
   degreeCertificateUrl: z.string().optional(),
   transcriptUrl: z.string().optional(),
   cvUrl: z.string().optional(),
+  certificationsUrl: z.string().optional(),
+  publicationsUrl: z.string().optional(),
+  supportingDocsUrl: z.string().optional(),
   canProofread: z.boolean().optional(),
 });
 
@@ -48,36 +53,135 @@ router.post(
       const data = parsed.data;
       const user = req.user!;
       const userRef = adminDb.collection("users").doc(user.uid);
+      const userSnap = await userRef.get();
+
+      if (!userSnap.exists) {
+        res.status(404).json({ error: "User profile not found" });
+        return;
+      }
+
+      const existing = userSnap.data() || {};
+
+      // Prevent duplicate active applications or approved writers from re-applying
+      if (existing.role === "admin") {
+        res.status(400).json({ error: "Administrators cannot apply as writers" });
+        return;
+      }
+
+      if (existing.verificationStatus === "approved" && existing.isVerifiedWriter === true) {
+        res.status(409).json({
+          error: "Your account is already an approved verified writer.",
+          code: "ALREADY_APPROVED_WRITER",
+        });
+        return;
+      }
+
+      if (
+        (existing.verificationStatus === "pending_review" || existing.verificationStatus === "under_review") &&
+        req.body?.allowResubmit !== true
+      ) {
+        res.status(409).json({
+          error: "An active writer application is already pending administrative review.",
+          code: "DUPLICATE_ACTIVE_APPLICATION",
+        });
+        return;
+      }
+
       const now = new Date().toISOString();
+      const isResubmission =
+        existing.verificationStatus === "clarification_required" || existing.verificationStatus === "rejected";
+      const displayName = (data.fullName || existing.displayName || user.email || "Applicant").trim();
+
+      const statusHistory = Array.isArray(existing.statusHistory) ? [...existing.statusHistory] : [];
+      statusHistory.push({
+        status: "pending_review",
+        actorId: user.uid,
+        actorName: displayName,
+        actorRole: existing.role || "customer",
+        timestamp: now,
+        note: isResubmission
+          ? "Applicant updated and resubmitted writer application credentials."
+          : "Applicant submitted writer credentials for administrative review.",
+      });
+
+      const existingAcademic = existing.academic || {};
+      const existingDocs = existingAcademic.documents || {};
 
       await userRef.update({
+        ...(data.fullName ? { displayName } : {}),
+        writerInterest: true,
         verificationStatus: "pending_review",
+        writerStatus: "inactive",
+        isVerifiedWriter: false,
+        profileCompletion: 100,
+        competencies: data.subjects,
+        subjectExpertise: data.subjects,
+        degreeLevel: data.degreeLevel || data.yearOfStudy,
+        submissionDate: now,
         academic: {
+          ...existingAcademic,
           university: data.university,
+          faculty: data.faculty || existingAcademic.faculty || "",
           major: data.major,
           yearOfStudy: data.yearOfStudy,
           degreeLevel: data.degreeLevel,
           subjects: data.subjects,
+          specializations: data.subjects,
           phone: data.phone,
-          bio: data.bio || "",
+          bio: data.bio ?? existingAcademic.bio ?? "",
           documents: {
-            degreeCertificateUrl: data.degreeCertificateUrl || null,
-            transcriptUrl: data.transcriptUrl || null,
-            cvUrl: data.cvUrl || null,
+            degreeCertificateUrl: data.degreeCertificateUrl ?? existingDocs.degreeCertificateUrl ?? null,
+            transcriptUrl: data.transcriptUrl ?? existingDocs.transcriptUrl ?? null,
+            cvUrl: data.cvUrl ?? existingDocs.cvUrl ?? null,
+            certificationsUrl: data.certificationsUrl ?? existingDocs.certificationsUrl ?? null,
+            publicationsUrl: data.publicationsUrl ?? existingDocs.publicationsUrl ?? null,
+            supportingDocsUrl: data.supportingDocsUrl ?? existingDocs.supportingDocsUrl ?? null,
           },
         },
         requestedCapabilities: data.canProofread ? ["writing", "proofreading"] : ["writing"],
+        statusHistory,
         updatedAt: now,
       });
 
       await logAuditEvent({
-        action: "writer_applied",
+        action: isResubmission ? "writer_application_resubmitted" : "writer_applied",
         actorId: user.uid,
         actorRole: user.role,
         targetId: user.uid,
-        details: { university: data.university, major: data.major },
+        details: { university: data.university, major: data.major, isResubmission },
         ip: req.ip,
       });
+
+      // Notify applicant
+      await createNotification({
+        userId: user.uid,
+        title: isResubmission ? "Writer Application Resubmitted" : "Writer Application Received",
+        message: `Your writer application for ${data.major} (${data.university}) has been submitted and is pending administrative review.`,
+        type: "writer_application",
+        relatedType: "writer_application",
+        relatedId: user.uid,
+        link: "/verification",
+      });
+
+      // Notify administrators
+      try {
+        const adminsSnap = await adminDb.collection("users").where("role", "==", "admin").get();
+        await Promise.allSettled(
+          adminsSnap.docs.map((adminDoc) =>
+            createNotification({
+              userId: adminDoc.id,
+              title: isResubmission ? "Writer Application Resubmitted" : "New Writer Application",
+              message: `${displayName} submitted writer credentials (${data.major}) for administrative review.`,
+              type: "writer_application",
+              relatedType: "writer_application",
+              relatedId: user.uid,
+              link: "/admin?tab=verifications",
+            })
+          )
+        );
+      } catch {
+        // Non-fatal if admin notification fanout encounters an issue
+      }
 
       res.status(200).json({
         success: true,
@@ -94,7 +198,7 @@ router.post(
 /**
  * GET /api/writers/pool
  * Retrieve list of funded, unassigned projects available for claiming.
- * Active Writers only.
+ * Active Verified Writers only.
  */
 router.get(
   "/pool",
@@ -102,6 +206,12 @@ router.get(
   requireRole("writer"),
   async (req: Request, res: Response): Promise<void> => {
     try {
+      const user = req.user!;
+      if (!user.isVerifiedWriter) {
+        res.status(403).json({ error: "Only verified approved writers can access the assignment pool" });
+        return;
+      }
+
       const snapshot = await adminDb
         .collection("assignments")
         .where("status", "==", "funded")
@@ -133,6 +243,11 @@ router.get(
   async (req: Request, res: Response): Promise<void> => {
     try {
       const user = req.user!;
+      if (!user.isVerifiedWriter) {
+        res.status(403).json({ error: "Only verified approved writers can access writer earnings" });
+        return;
+      }
+
       const wallet = await ledgerService.getWalletSummary(user.uid);
       const recentTransactions = await ledgerService.listUserEntries(user.uid, 50);
 
@@ -159,6 +274,10 @@ router.post(
   async (req: Request, res: Response): Promise<void> => {
     try {
       const user = req.user!;
+      if (!user.isVerifiedWriter) {
+        res.status(403).json({ error: "Only verified approved writers can request payouts" });
+        return;
+      }
       const { amount, paymentMethod, paymentDetails, idempotencyKey } = req.body;
 
       if (typeof amount !== "number" || !Number.isFinite(amount) || amount < 50) {

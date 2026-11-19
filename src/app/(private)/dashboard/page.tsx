@@ -222,23 +222,44 @@ export default function Dashboard() {
         </Card>
       )}
 
-      {/* RENDER ROLE BASED SUB-DASHBOARD */}
-      {profile.role === "customer" && <CustomerDashboard profile={profile} refreshProfile={refreshProfile} />}
-      {["writer", "proofreader"].includes(profile.role) && <WriterDashboard profile={profile} refreshProfile={refreshProfile} />}
-      {profile.role === "admin" && (
-        <Card className="text-center p-12">
-          <CardContent className="flex flex-col items-center gap-4">
-            <div className="text-5xl">⚙️</div>
-            <h1 className="text-2xl font-black text-foreground">Admin Control panel Detected</h1>
-            <p className="text-sm text-muted-foreground max-w-sm">
-              Please use the central Administration Control Panel in the top menu to govern verifications, dispute escrow resolutions, and platform parameters.
-            </p>
-            <Link href="/admin">
-              <Button variant="primary">Access Admin Panel</Button>
-            </Link>
-          </CardContent>
-        </Card>
-      )}
+      {/* RENDER ROLE BASED SUB-DASHBOARD (Phase 6: Strict Writer Approval Guard + Legacy Proofreader Compat) */}
+      {(() => {
+        const isActive = profile.status === "active";
+        const isApprovedWriter =
+          profile.role === "writer" &&
+          isActive &&
+          profile.verificationStatus === "approved" &&
+          profile.isVerifiedWriter === true &&
+          profile.writerStatus === "active";
+        const isLegacyApprovedProofreader =
+          profile.role === "proofreader" &&
+          isActive &&
+          profile.verificationStatus === "approved" &&
+          profile.isVerifiedWriter === true;
+
+        if (profile.role === "admin") {
+          return (
+            <Card className="text-center p-12">
+              <CardContent className="flex flex-col items-center gap-4">
+                <div className="text-5xl">⚙️</div>
+                <h1 className="text-2xl font-black text-foreground">Admin Control panel Detected</h1>
+                <p className="text-sm text-muted-foreground max-w-sm">
+                  Please use the central Administration Control Panel in the top menu to govern verifications, dispute escrow resolutions, and platform parameters.
+                </p>
+                <Link href="/admin">
+                  <Button variant="primary">Access Admin Panel</Button>
+                </Link>
+              </CardContent>
+            </Card>
+          );
+        }
+
+        if (isApprovedWriter || isLegacyApprovedProofreader) {
+          return <WriterDashboard profile={profile} refreshProfile={refreshProfile} />;
+        }
+
+        return <CustomerDashboard profile={profile} refreshProfile={refreshProfile} />;
+      })()}
     </div>
   );
 }
@@ -452,6 +473,85 @@ function CustomerDashboard({ profile, refreshProfile }: SubDashboardProps) {
           </CardContent>
         </Card>
       </div>
+
+      {/* Phase 4: Writer Application Entry Point / Application Status Card */}
+      {(profile.writerInterest === true ||
+        profile.role === "writer" ||
+        (profile.verificationStatus && profile.verificationStatus !== "draft")) && (
+        <Card className="border-primary/35 bg-primary/5 shadow-sm">
+          <CardContent className="pt-5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-extrabold text-sm text-foreground">
+                  ✍️ Academic Writer Application
+                </span>
+                {profile.verificationStatus === "pending_review" && (
+                  <Badge variant="warning" className="uppercase font-mono text-[10px]">
+                    Pending Review
+                  </Badge>
+                )}
+                {profile.verificationStatus === "under_review" && (
+                  <Badge variant="info" className="uppercase font-mono text-[10px]">
+                    Under Review
+                  </Badge>
+                )}
+                {profile.verificationStatus === "clarification_required" && (
+                  <Badge variant="warning" className="uppercase font-mono text-[10px]">
+                    Clarification Required
+                  </Badge>
+                )}
+                {profile.verificationStatus === "rejected" && (
+                  <Badge variant="danger" className="uppercase font-mono text-[10px]">
+                    Rejected
+                  </Badge>
+                )}
+                {(!profile.verificationStatus ||
+                  profile.verificationStatus === "draft" ||
+                  profile.verificationStatus === "incomplete") && (
+                  <Badge variant="secondary" className="uppercase font-mono text-[10px]">
+                    Not Applied
+                  </Badge>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground leading-relaxed font-semibold">
+                {profile.verificationStatus === "pending_review"
+                  ? "Your writer application has been submitted and is awaiting administrative review. You retain full customer access while your credentials are reviewed."
+                  : profile.verificationStatus === "under_review"
+                  ? "An administrator is currently reviewing your submitted academic credentials and supporting documents."
+                  : profile.verificationStatus === "clarification_required"
+                  ? `Administrator requested clarification on your writer application: "${profile.rejectionReason || "Please check your verification documents."}"`
+                  : profile.verificationStatus === "rejected"
+                  ? `Your writer application was not approved: "${profile.rejectionReason || "Credentials did not meet criteria."}" Your customer account remains active.`
+                  : "You selected an interest in becoming a DataBoy writer. Complete your academic profile and upload your credentials to apply."}
+              </p>
+            </div>
+            <Link href="/verification" className="shrink-0 w-full sm:w-auto">
+              <Button
+                variant={
+                  !profile.verificationStatus ||
+                  profile.verificationStatus === "draft" ||
+                  profile.verificationStatus === "incomplete" ||
+                  profile.verificationStatus === "clarification_required" ||
+                  profile.verificationStatus === "rejected"
+                    ? "primary"
+                    : "outline"
+                }
+                size="sm"
+                className="w-full font-bold uppercase tracking-wider text-[10px]"
+              >
+                {!profile.verificationStatus ||
+                profile.verificationStatus === "draft" ||
+                profile.verificationStatus === "incomplete"
+                  ? "Apply to Become a Writer →"
+                  : profile.verificationStatus === "clarification_required" ||
+                    profile.verificationStatus === "rejected"
+                  ? "Update & Resubmit Application"
+                  : "View Application Status"}
+              </Button>
+            </Link>
+          </CardContent>
+        </Card>
+      )}
 
       {/* 3. Attention Card (Revision 7) */}
       {getStudentAttentionCard()}

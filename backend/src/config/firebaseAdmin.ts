@@ -3,6 +3,7 @@ import { initializeApp, getApps, deleteApp, cert, App } from "firebase-admin/app
 import { getFirestore, Firestore } from "firebase-admin/firestore";
 import { getAuth, Auth } from "firebase-admin/auth";
 import { getStorage, Storage } from "firebase-admin/storage";
+import { getMessaging, Messaging } from "firebase-admin/messaging";
 
 export const EXPECTED_FIREBASE_PROJECT_ID = "databoy-aa871";
 
@@ -267,4 +268,5 @@ const app: App = initializeFirebaseAdmin();
 export const adminDb: Firestore = getFirestore(app);
 export const adminAuth: Auth = getAuth(app);
 export const adminStorage: Storage = getStorage(app);
+export const adminMessaging: Messaging = getMessaging(app);
 export { app };

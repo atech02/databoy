@@ -58,7 +58,7 @@ export default function AdminPanel() {
   const [loadingPending, setLoadingPending] = useState(true);
   const [actioningUser, setActioningUser] = useState<string | null>(null);
   const [verificationNotes, setVerificationNotes] = useState<Record<string, string>>({});
-  const [verFilter, setVerFilter] = useState<"pending_review" | "approved" | "rejected" | "clarification_required">("pending_review");
+  const [verFilter, setVerFilter] = useState<"pending_review" | "under_review" | "approved" | "rejected" | "clarification_required">("pending_review");
 
   // Assignment queue
   const [allAssignments, setAllAssignments] = useState<any[]>([]);
@@ -296,6 +296,7 @@ export default function AdminPanel() {
     return pendingExperts.filter(exp => {
       const status = exp.verificationStatus || "draft";
       if (verFilter === "pending_review") return status === "pending_review";
+      if (verFilter === "under_review") return status === "under_review";
       if (verFilter === "approved") return status === "approved";
       if (verFilter === "rejected") return status === "rejected";
       if (verFilter === "clarification_required") return status === "clarification_required";
@@ -314,7 +315,8 @@ export default function AdminPanel() {
   const handleApproveExpert = async (uid: string, name: string, role: string) => {
     setActioningUser(uid);
     try {
-      await userService.approveVerification(uid, profile!);
+      const note = verificationNotes[uid]?.trim();
+      await userService.approveVerification(uid, profile!, note);
       await adminService.logPlatformAudit(
         profile!,
         "VERIFICATION_APPROVED",
@@ -326,6 +328,17 @@ export default function AdminPanel() {
       await Promise.all([loadVerifications(), loadUsers(), loadAuditLogs(), loadMetrics()]);
     } catch (err: any) {
       alert(`Approval failed: ${err?.message}`);
+    } finally { setActioningUser(null); }
+  };
+
+  const handleMarkUnderReview = async (uid: string) => {
+    setActioningUser(uid);
+    try {
+      const note = verificationNotes[uid]?.trim();
+      await userService.markVerificationUnderReview(uid, note);
+      await Promise.all([loadVerifications(), loadAuditLogs(), loadMetrics()]);
+    } catch (err: any) {
+      alert(`Failed to update status: ${err?.message}`);
     } finally { setActioningUser(null); }
   };
 
@@ -879,6 +892,7 @@ export default function AdminPanel() {
             <div className="flex flex-wrap gap-2 mb-2">
               {[
                 { label: "Pending Review", value: "pending_review", count: pendingExperts.filter(e => e.verificationStatus === "pending_review").length },
+                { label: "Under Review", value: "under_review", count: pendingExperts.filter(e => e.verificationStatus === "under_review").length },
                 { label: "Approved", value: "approved", count: pendingExperts.filter(e => e.verificationStatus === "approved").length },
                 { label: "Rejected", value: "rejected", count: pendingExperts.filter(e => e.verificationStatus === "rejected").length },
                 { label: "Clarification Required", value: "clarification_required", count: pendingExperts.filter(e => e.verificationStatus === "clarification_required").length },
@@ -1041,6 +1055,33 @@ export default function AdminPanel() {
                       </div>
                     </div>
 
+                    {/* Application Decision History Timeline */}
+                    {exp.statusHistory && exp.statusHistory.length > 0 && (
+                      <div className="border-b border-border/20 pb-4">
+                        <strong className="text-foreground block text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">
+                          Application Decision History:
+                        </strong>
+                        <div className="flex flex-col gap-2 max-h-40 overflow-y-auto">
+                          {exp.statusHistory.slice().reverse().map((h, i) => (
+                            <div key={i} className="text-xs bg-secondary/20 border border-border/30 rounded-lg px-3 py-2 flex flex-col gap-0.5">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-bold text-foreground capitalize">
+                                  {h.status?.replace(/_/g, " ")}
+                                </span>
+                                <span className="text-[10px] font-mono text-muted-foreground">
+                                  {h.timestamp ? new Date(h.timestamp).toLocaleString() : ""}
+                                </span>
+                              </div>
+                              <span className="text-[10px] text-muted-foreground">
+                                By: {h.actorName || (h as any).adminName || "System"} ({h.actorRole || "admin"})
+                              </span>
+                              {h.note && <p className="text-[11px] italic text-foreground/85 mt-0.5">&quot;{h.note}&quot;</p>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
                     {/* Admin internal notes */}
                     <div>
                       <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground block mb-1.5">
@@ -1055,32 +1096,50 @@ export default function AdminPanel() {
                     </div>
                   </CardContent>
 
-                  <CardFooter className="flex flex-wrap justify-end gap-3 border-t border-border/40 bg-secondary/20 pt-4">
-                    <Button
-                      variant="outline" size="sm"
-                      onClick={() => handleRequestMoreInfo(exp.uid, exp.displayName)}
-                      disabled={actioningUser !== null || exp.verificationStatus === "approved"}
-                      className="text-xs hover:text-primary hover:border-primary hover:bg-primary/5"
-                    >
-                      📩 Request Clarification
-                    </Button>
-                    <Button
-                      variant="outline" size="sm"
-                      onClick={() => handleRejectExpert(exp.uid, exp.displayName, exp.role)}
-                      disabled={actioningUser !== null || exp.verificationStatus === "approved"}
-                      className="hover:text-danger hover:border-danger hover:bg-danger/5 transition-all text-xs"
-                    >
-                      Reject Candidate
-                    </Button>
-                    <Button
-                      variant="primary" size="sm"
-                      onClick={() => handleApproveExpert(exp.uid, exp.displayName, exp.role)}
-                      isLoading={actioningUser === exp.uid}
-                      disabled={actioningUser !== null || exp.verificationStatus === "approved"}
-                      className="bg-success border-success hover:bg-success/90 hover:border-success/90 transition-all text-xs font-bold"
-                    >
-                      ✓ Approve Expert Account
-                    </Button>
+                  <CardFooter className="flex flex-wrap justify-between items-center gap-3 border-t border-border/40 bg-secondary/20 pt-4">
+                    <Link href={`/admin/detail?id=${exp.uid}`}>
+                      <Button variant="outline" size="sm" className="text-xs font-semibold">
+                        View Full Profile & History
+                      </Button>
+                    </Link>
+                    <div className="flex flex-wrap justify-end gap-2">
+                      {exp.verificationStatus === "pending_review" && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleMarkUnderReview(exp.uid)}
+                          disabled={actioningUser !== null}
+                          className="text-xs"
+                        >
+                          🔍 Mark Under Review
+                        </Button>
+                      )}
+                      <Button
+                        variant="outline" size="sm"
+                        onClick={() => handleRequestMoreInfo(exp.uid, exp.displayName)}
+                        disabled={actioningUser !== null || exp.verificationStatus === "approved"}
+                        className="text-xs hover:text-primary hover:border-primary hover:bg-primary/5"
+                      >
+                        📩 Request Clarification
+                      </Button>
+                      <Button
+                        variant="outline" size="sm"
+                        onClick={() => handleRejectExpert(exp.uid, exp.displayName, exp.role)}
+                        disabled={actioningUser !== null || exp.verificationStatus === "approved"}
+                        className="hover:text-danger hover:border-danger hover:bg-danger/5 transition-all text-xs"
+                      >
+                        Reject Candidate
+                      </Button>
+                      <Button
+                        variant="primary" size="sm"
+                        onClick={() => handleApproveExpert(exp.uid, exp.displayName, exp.role)}
+                        isLoading={actioningUser === exp.uid}
+                        disabled={actioningUser !== null || exp.verificationStatus === "approved"}
+                        className="bg-success border-success hover:bg-success/90 hover:border-success/90 transition-all text-xs font-bold"
+                      >
+                        ✓ Approve Expert Account
+                      </Button>
+                    </div>
                   </CardFooter>
                 </Card>
               ))}

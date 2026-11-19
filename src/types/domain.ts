@@ -4,8 +4,16 @@ export type VerificationStatus =
   | "draft" 
   | "incomplete" 
   | "pending_review" 
+  | "under_review"
   | "clarification_required" 
   | "approved" 
+  | "rejected";
+
+export type WriterApplicationStatus =
+  | "not_applied"
+  | "pending_review"
+  | "under_review"
+  | "approved"
   | "rejected";
 
 export type UserAvailability = "available" | "busy" | "away" | "suspended";
@@ -143,9 +151,17 @@ export interface UserProfile {
   // Extended fields for V1 profile consolidation (Revision 1)
   educationLevel?: string;   // For student/customer
   programOfStudy?: string;   // For student/customer
+  writerInterest?: boolean;  // Whether user selected writer interest during registration
   writerProfile?: WriterProfileDetails; // Consolidated writer details
   preferences?: {
+    notifications?: {
+      inApp?: boolean;
+      email?: boolean;
+      push?: boolean;
+    };
+    inAppNotifications?: boolean;
     emailNotifications?: boolean;
+    pushNotifications?: boolean;
     smsNotifications?: boolean;
   };
 
@@ -441,6 +457,14 @@ export type NotificationType =
   | "revision_requested"
   | "assignment_completed"
   | "dispute_opened"
+  | "payment"
+  | "assignment"
+  | "review"
+  | "research"
+  | "writer_application"
+  | "contract"
+  | "transaction"
+  | "announcement"
   | "system";
 
 export interface Notification {
@@ -450,10 +474,14 @@ export interface Notification {
   title: string;
   message: string;
   relatedId?: string;      // projectId | researchRequestId | disputeId
-  relatedType?: "assignment" | "research" | "dispute" | "system";
+  relatedType?: "assignment" | "research" | "dispute" | "writer_application" | "system";
   relatedUrl?: string;     // Direct navigation path
+  link?: string;           // Backend compatibility link field
+  essential?: boolean;     // Essential account/security notices bypass opt-out
+  emailStatus?: "sent" | "skipped_disabled" | "skipped_unconfigured" | "failed" | "duplicate_suppressed";
+  pushStatus?: "sent" | "skipped_disabled" | "no_devices" | "failed";
   read: boolean;
-  createdAt: string;
+  createdAt: any;          // ISO string or Firestore Timestamp
 }
 
 

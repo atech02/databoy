@@ -32,8 +32,8 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
         const needsOnboarding = !profile.isOnboarded && profile.role !== "admin";
         
         if (needsOnboarding) {
-          if (profile.role === "writer") {
-            console.log("[ProtectedRoute] Onboarding incomplete for writer. Redirecting to /onboarding/writer");
+          if (profile.role === "writer" || profile.writerInterest) {
+            console.log("[ProtectedRoute] Onboarding incomplete for writer applicant. Redirecting to /onboarding/writer");
             router.replace("/onboarding/writer");
           } else {
             console.log("[ProtectedRoute] Onboarding incomplete for student. Redirecting to /onboarding/student");

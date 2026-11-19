@@ -39,8 +39,8 @@ export default function WriterOnboarding() {
         return;
       }
       if (profile) {
-        // Redirect non-writer profiles
-        if (profile.role !== "writer") {
+        // Redirect non-writer profiles that did not express writer interest
+        if (profile.role !== "writer" && !profile.writerInterest) {
           router.replace(profile.role === "customer" ? "/onboarding/student" : "/dashboard");
           return;
         }
@@ -118,6 +118,7 @@ export default function WriterOnboarding() {
       await userService.updateUserProfile(profile.uid, {
         displayName: finalDisplayName,
         isOnboarded: true,
+        writerInterest: true,
         profileCompletion: 60, // Awaiting verification files later
         verificationStatus: "draft",
         availability: "available",

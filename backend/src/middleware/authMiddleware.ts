@@ -78,7 +78,7 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
 
     const isUnverified =
       userData.isVerifiedWriter === false ||
-      ["pending_review", "draft", "incomplete", "rejected", "clarification_required"].includes(
+      ["pending_review", "under_review", "draft", "incomplete", "rejected", "clarification_required"].includes(
         userData.verificationStatus
       );
 

@@ -24,6 +24,22 @@ import {
   COMPETENCY_CATEGORIES
 } from "@/utils/lookups";
 
+const PLACEHOLDER_VALS = new Set(["confidential", "academic department", "n/a", "none", ""]);
+
+function cleanFieldValue(val?: string | null): string {
+  if (!val || typeof val !== "string") return "";
+  return PLACEHOLDER_VALS.has(val.trim().toLowerCase()) ? "" : val.trim();
+}
+
+const ALLOWED_DOCUMENT_MIMES = new Set([
+  "application/pdf",
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+]);
+
+const ALLOWED_DOCUMENT_EXTS = new Set(["pdf", "png", "jpg", "jpeg", "webp"]);
+
 export default function VerificationCentre() {
   const { profile, loading, refreshProfile } = useAuth();
   const { isDark } = useTheme();
@@ -48,7 +64,14 @@ export default function VerificationCentre() {
   const [supportingDocsUrl, setSupportingDocsUrl] = useState("");
 
   // Upload progress states
-  const [uploadProgress, setUploadProgress] = useState<Record<string, number | null>>({});
+  const [uploadProgress, setUploadProgress] = useState<Record<string, number | null>>({
+    degree_certificate: null,
+    transcript: null,
+    cv: null,
+    certifications: null,
+    publications: null,
+    supporting_docs: null,
+  });
 
   // UI status states
   const [saving, setSaving] = useState(false);
@@ -62,19 +85,19 @@ export default function VerificationCentre() {
       return;
     }
 
-    if (profile && profile.role === "customer") {
-      router.replace("/dashboard");
+    if (profile && profile.role === "admin") {
+      router.replace("/admin?tab=verifications");
       return;
     }
 
     if (profile) {
       setFullName(profile.displayName || "");
       if (profile.academic) {
-        setPhone(profile.academic.phone || "");
-        setUniversity(profile.academic.university || "");
-        setFaculty(profile.academic.faculty || "");
-        setMajor(profile.academic.major || "");
-        setYearOfStudy(profile.academic.yearOfStudy || "");
+        setPhone(cleanFieldValue(profile.academic.phone));
+        setUniversity(cleanFieldValue(profile.academic.university));
+        setFaculty(cleanFieldValue(profile.academic.faculty));
+        setMajor(cleanFieldValue(profile.academic.major));
+        setYearOfStudy(cleanFieldValue(profile.academic.yearOfStudy));
         setBio(profile.academic.bio || "");
         setSelectedSpecs(profile.academic.specializations || profile.competencies || []);
         
@@ -138,6 +161,21 @@ export default function VerificationCentre() {
     file: File
   ) => {
     setError(null);
+
+    // Validate file type and size before uploading
+    const ext = file.name.split(".").pop()?.toLowerCase() || "";
+    const mime = (file.type || "").split(";")[0].trim().toLowerCase();
+    if (!ALLOWED_DOCUMENT_EXTS.has(ext) || (mime && !ALLOWED_DOCUMENT_MIMES.has(mime))) {
+      setError(
+        `Invalid file type for ${docType.replace("_", " ")}. Allowed formats: PDF (.pdf) or images (.png, .jpg, .jpeg, .webp).`
+      );
+      return;
+    }
+    if (file.size <= 0 || file.size > 20 * 1024 * 1024) {
+      setError(`File size for ${docType.replace("_", " ")} must be between 1 KB and 20 MB.`);
+      return;
+    }
+
     setUploadProgress(prev => ({ ...prev, [docType]: 0 }));
     try {
       const url = await storageService.uploadVerificationDocument(
@@ -168,86 +206,83 @@ export default function VerificationCentre() {
     setError(null);
     setSuccessMsg(null);
 
+    if (profile.verificationStatus === "pending_review" || profile.verificationStatus === "under_review") {
+      setError("You already have an active writer application under administrative review.");
+      return;
+    }
+
     const { score, missing } = calculateCompleteness();
     if (score < 100) {
-      setError(`Cannot submit verification request. Please fill out all required details. Missing: ${missing.join(", ")}`);
+      setError(`Cannot submit writer application. Please complete all required personal, academic, and document fields. Missing: ${missing.join(", ")}`);
       return;
     }
 
     setSaving(true);
     try {
-      const documents = {
-        degreeCertificateUrl: degreeUrl,
-        transcriptUrl: transcriptUrl,
-        cvUrl,
-        certificationsUrl,
-        publicationsUrl,
-        supportingDocsUrl
-      };
+      const isResubmission =
+        profile.verificationStatus === "clarification_required" || profile.verificationStatus === "rejected";
 
-      const academic = {
-        phone,
-        university,
-        faculty,
-        major,
-        yearOfStudy,
-        bio: bio.trim(),
-        specializations: selectedSpecs,
-        documents
-      };
-
-      const timestamp = new Date().toISOString();
-      const isResubmission = profile.verificationStatus === "clarification_required";
-      const nextStatus = "pending_review";
-
-      const historyEntry = {
-        status: nextStatus,
-        actorId: profile.uid,
-        actorName: fullName,
-        actorRole: profile.role,
-        timestamp,
-        note: isResubmission 
-          ? "Writer resubmitted credentials following clarification request."
-          : "Writer submitted credentials for administrative verification."
-      };
-
-      const statusHistory = [...(profile.statusHistory || []), historyEntry];
-
-      // Update user profile in database (Revision 1 & 11)
-      await userService.updateUserProfile(profile.uid, {
-        displayName: fullName,
-        verificationStatus: nextStatus,
-        writerStatus: "inactive",
-        isVerifiedWriter: false,
-        profileCompletion: score,
-        competencies: selectedSpecs,
-        subjectExpertise: selectedSpecs,
-        degreeLevel: yearOfStudy,
-        submissionDate: timestamp,
-        academic,
-        statusHistory
-      });
-
-      // Write administrative audit trail (Revision 7)
-      await adminService.logPlatformAudit(
-        { uid: profile.uid, displayName: fullName, role: profile.role } as any,
-        isResubmission ? "VERIFICATION_RESUBMITTED" : "VERIFICATION_SUBMITTED",
-        profile.uid,
-        "user",
-        `Writer [${fullName}] ${isResubmission ? "resubmitted" : "submitted"} verification documents (Completeness: ${score}%).`
-      );
-
-      // Trigger notifications (Revision 12)
-      if (isResubmission) {
-        await notificationService.notifyVerificationResubmitted(profile.uid, fullName);
-      } else {
-        await notificationService.notifyVerificationSubmitted(profile.uid, fullName);
+      try {
+        await userService.applyForWriter({
+          fullName: fullName.trim(),
+          phone: phone.trim(),
+          university,
+          faculty,
+          major,
+          yearOfStudy,
+          degreeLevel: yearOfStudy,
+          subjects: selectedSpecs,
+          bio: bio.trim(),
+          degreeCertificateUrl: degreeUrl,
+          transcriptUrl: transcriptUrl,
+          cvUrl: cvUrl || undefined,
+          certificationsUrl: certificationsUrl || undefined,
+          publicationsUrl: publicationsUrl || undefined,
+          supportingDocsUrl: supportingDocsUrl || undefined,
+          allowResubmit: isResubmission,
+        });
+      } catch (apiErr: any) {
+        // If backend throws 409 duplicate active application, surface it directly
+        if (apiErr?.status === 409 || apiErr?.status === 400) {
+          throw apiErr;
+        }
+        // Offline / local emulator fallback: update only non-protected fields permitted by firestore.rules
+        const timestamp = new Date().toISOString();
+        await userService.updateUserProfile(profile.uid, {
+          displayName: fullName.trim(),
+          writerInterest: true,
+          verificationStatus: "pending_review",
+          profileCompletion: score,
+          competencies: selectedSpecs,
+          subjectExpertise: selectedSpecs,
+          degreeLevel: yearOfStudy,
+          submissionDate: timestamp,
+          academic: {
+            phone: phone.trim(),
+            university,
+            faculty,
+            major,
+            yearOfStudy,
+            bio: bio.trim(),
+            specializations: selectedSpecs,
+            documents: {
+              degreeCertificateUrl: degreeUrl,
+              transcriptUrl: transcriptUrl,
+              cvUrl,
+              certificationsUrl,
+              publicationsUrl,
+              supportingDocsUrl,
+            },
+          },
+        });
       }
 
       await refreshProfile();
-      setSuccessMsg("Verification credentials submitted successfully! Administrators have been notified.");
+      setSuccessMsg(
+        "Your writer application and credentials have been submitted for administrative review. Your account remains a Customer account until approved by an administrator."
+      );
     } catch (err: any) {
-      setError(err?.message || "Failed to submit verification credentials.");
+      setError(err?.message || "Failed to submit writer application credentials.");
     } finally {
       setSaving(false);
     }
@@ -256,24 +291,12 @@ export default function VerificationCentre() {
   const handleResetRejection = async () => {
     setSaving(true);
     try {
-      const timestamp = new Date().toISOString();
-      const nextStatus = "draft";
-      const historyEntry = {
-        status: nextStatus,
-        actorId: profile.uid,
-        actorName: profile.displayName,
-        actorRole: profile.role,
-        timestamp,
-        note: "Writer reset verification status to re-edit profile files."
-      };
-
       await userService.updateUserProfile(profile.uid, {
-        verificationStatus: nextStatus,
-        statusHistory: [...(profile.statusHistory || []), historyEntry]
+        verificationStatus: "draft",
       });
       await refreshProfile();
     } catch (err: any) {
-      setError(err?.message || "Failed to reset verification queue.");
+      setError(err?.message || "Failed to reset application form.");
     } finally {
       setSaving(false);
     }
@@ -281,10 +304,12 @@ export default function VerificationCentre() {
 
   const status = profile.verificationStatus || "draft";
   const isPending = status === "pending_review";
+  const isUnderReview = status === "under_review";
   const isApproved = status === "approved" && profile.writerStatus === "active" && profile.isVerifiedWriter === true;
   const isRejected = status === "rejected";
   const isClarification = status === "clarification_required";
-  const isEditable = status === "draft" || status === "incomplete" || isClarification || isRejected;
+  const isNotApplied = status === "draft" || status === "incomplete";
+  const isEditable = isNotApplied || isClarification || isRejected;
 
   return (
     <div className="flex flex-col gap-6 max-w-4xl mx-auto px-4 pb-12">
@@ -314,11 +339,22 @@ export default function VerificationCentre() {
               {isPending && (
                 <>
                   <div className="w-16 h-16 rounded-full bg-warning/15 flex items-center justify-center text-3xl text-warning animate-pulse">⏳</div>
-                  <h3 className="text-lg font-black text-foreground">Review In Progress</h3>
+                  <h3 className="text-lg font-black text-foreground">Pending Review</h3>
                   <p className="text-xs text-muted-foreground leading-normal">
-                    Your credentials and qualifications scan are currently in the administrator review queue. Verification usually takes 12-24 hours.
+                    Your writer application and academic scans have been submitted and are in the administrator review queue.
                   </p>
                   <Badge variant="warning" className="uppercase font-mono text-[9px] font-bold">Pending Review</Badge>
+                </>
+              )}
+
+              {isUnderReview && (
+                <>
+                  <div className="w-16 h-16 rounded-full bg-info/15 flex items-center justify-center text-3xl text-info animate-pulse">🔍</div>
+                  <h3 className="text-lg font-black text-foreground">Under Review</h3>
+                  <p className="text-xs text-muted-foreground leading-normal">
+                    An administrator is actively auditing your submitted academic credentials and supporting documents.
+                  </p>
+                  <Badge variant="info" className="uppercase font-mono text-[9px] font-bold">Under Review</Badge>
                 </>
               )}
 
@@ -336,22 +372,22 @@ export default function VerificationCentre() {
               {isRejected && (
                 <>
                   <div className="w-16 h-16 rounded-full bg-danger/15 flex items-center justify-center text-3xl text-danger">❌</div>
-                  <h3 className="text-lg font-black text-foreground">Review Rejected</h3>
+                  <h3 className="text-lg font-black text-foreground">Application Rejected</h3>
                   <p className="text-xs text-muted-foreground leading-normal">
-                    We were unable to approve your credentials. Please review feedback, edit details and re-upload documents.
+                    We were unable to approve your credentials. Your customer account remains active. You may review feedback, edit details, and re-upload documents.
                   </p>
                   <Badge variant="danger" className="uppercase font-mono text-[9px] font-bold">Rejected</Badge>
                 </>
               )}
 
-              {status === "draft" && (
+              {isNotApplied && (
                 <>
                   <div className="w-16 h-16 rounded-full bg-secondary flex items-center justify-center text-3xl text-muted-foreground">📝</div>
-                  <h3 className="text-lg font-black text-foreground">Incomplete Profile</h3>
+                  <h3 className="text-lg font-black text-foreground">Not Applied</h3>
                   <p className="text-xs text-muted-foreground leading-normal">
-                    Fill out all required details and upload your official degree certificate & transcript to request verification.
+                    Complete all required personal & academic details and upload your official degree certificate & transcript to apply as a DataBoy writer.
                   </p>
-                  <Badge variant="secondary" className="uppercase font-mono text-[9px] font-bold">Draft Profile</Badge>
+                  <Badge variant="secondary" className="uppercase font-mono text-[9px] font-bold">Not Applied</Badge>
                 </>
               )}
             </CardContent>
@@ -492,7 +528,7 @@ export default function VerificationCentre() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <Select
                     label="University / College"
-                    options={UNIVERSITIES}
+                    options={[{ value: "", label: "Select University / College" }, ...UNIVERSITIES]}
                     value={university}
                     onChange={(e) => setUniversity(e.target.value)}
                     required
@@ -501,7 +537,7 @@ export default function VerificationCentre() {
 
                   <Select
                     label="Faculty / Department"
-                    options={FACULTIES}
+                    options={[{ value: "", label: "Select Faculty / Department" }, ...FACULTIES]}
                     value={faculty}
                     onChange={(e) => setFaculty(e.target.value)}
                     required
@@ -512,7 +548,7 @@ export default function VerificationCentre() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <Select
                     label="Degree Major / Program"
-                    options={activeMajors}
+                    options={[{ value: "", label: faculty ? "Select Degree Major" : "Select Faculty First" }, ...activeMajors]}
                     value={major}
                     onChange={(e) => setMajor(e.target.value)}
                     required
@@ -521,7 +557,7 @@ export default function VerificationCentre() {
 
                   <Select
                     label="Study / Graduation Year"
-                    options={YEARS_OF_STUDY}
+                    options={[{ value: "", label: "Select Year of Study" }, ...YEARS_OF_STUDY]}
                     value={yearOfStudy}
                     onChange={(e) => setYearOfStudy(e.target.value)}
                     required
@@ -772,7 +808,14 @@ export default function VerificationCentre() {
 
                 </div>
               </CardContent>
-              <CardFooter className="flex justify-end gap-3 border-t border-border/25 bg-secondary/10 pt-4">
+              <CardFooter className="flex justify-between items-center flex-wrap gap-3 border-t border-border/25 bg-secondary/10 pt-4">
+                <span className="text-xs text-muted-foreground">
+                  {isPending || isUnderReview
+                    ? "Your application is locked while under administrative review."
+                    : isApproved
+                    ? "Your writer account is approved and active."
+                    : "Complete all 10 required items (100%) to enable submission."}
+                </span>
                 <Button 
                   variant="primary" 
                   type="submit" 
@@ -780,7 +823,11 @@ export default function VerificationCentre() {
                   disabled={!isEditable || completenessScore < 100}
                   className="font-bold uppercase tracking-wider text-xs shadow-md bg-primary disabled:opacity-50"
                 >
-                  Submit Credentials For Review
+                  {isPending || isUnderReview
+                    ? "Application Under Review"
+                    : isApproved
+                    ? "Application Approved"
+                    : "Submit Writer Application"}
                 </Button>
               </CardFooter>
             </Card>
