@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
 import { userService } from "@/services/userService";
-import { notificationService, NotificationConfigStatus } from "@/services/notificationService";
+import { notificationService, NotificationConfigStatus, PushRegistrationState } from "@/services/notificationService";
 import { BackButton } from "@/components/ui/BackButton";
 import { Button } from "@/components/ui/Button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/Card";
@@ -26,6 +26,7 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [togglingPush, setTogglingPush] = useState(false);
   const [showPushExplainModal, setShowPushExplainModal] = useState(false);
+  const [pushState, setPushState] = useState<PushRegistrationState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -159,7 +160,8 @@ export default function SettingsPage() {
 
     try {
       const res = await notificationService.enablePushNotifications();
-      if (!res.success) {
+      setPushState(res.state);
+      if (!res.success || res.state !== "enabled") {
         setError(res.error || "Could not enable push notifications.");
         setPushNotifications(false);
       } else {
@@ -169,6 +171,8 @@ export default function SettingsPage() {
         setSuccess("Push notifications enabled for this device.");
       }
     } catch (err: any) {
+      setPushState("registration_failed");
+      setPushNotifications(false);
       setError(err?.message || "Failed to enable push notifications.");
     } finally {
       setTogglingPush(false);
@@ -413,15 +417,51 @@ export default function SettingsPage() {
                     size="sm"
                     onClick={handlePushToggleClick}
                     isLoading={togglingPush}
-                    disabled={!pushSupport.supported && !pushNotifications}
+                    disabled={
+                      (!pushSupport.supported ||
+                        notificationService.getPushReadinessState(pushNotifications).state ===
+                          "configuration_missing") &&
+                      !pushNotifications
+                    }
                     className="shrink-0 text-xs font-bold"
                   >
                     {pushNotifications ? "Disable Push" : "Enable Push"}
                   </Button>
                 </div>
-                {!pushSupport.supported && (
-                  <span className="text-[11px] text-muted-foreground">ℹ️ {pushSupport.reason}</span>
-                )}
+                {(() => {
+                  const readiness = notificationService.getPushReadinessState(pushNotifications);
+                  const effectiveState = pushState || readiness.state;
+                  if (effectiveState === "enabled") return null;
+                  if (effectiveState === "unsupported") {
+                    return (
+                      <span className="text-[11px] text-muted-foreground">
+                        ℹ️ Status: <strong>unsupported</strong> — {pushSupport.reason}
+                      </span>
+                    );
+                  }
+                  if (effectiveState === "configuration_missing") {
+                    return (
+                      <span className="text-[11px] text-muted-foreground">
+                        ℹ️ Status: <strong>configuration_missing</strong> — {readiness.reason}
+                      </span>
+                    );
+                  }
+                  if (effectiveState === "permission_denied") {
+                    return (
+                      <span className="text-[11px] text-muted-foreground">
+                        ℹ️ Status: <strong>permission_denied</strong> — Browser notification permission is denied. In-app notifications remain active.
+                      </span>
+                    );
+                  }
+                  if (effectiveState === "registration_failed") {
+                    return (
+                      <span className="text-[11px] text-muted-foreground">
+                        ℹ️ Status: <strong>registration_failed</strong> — Device push registration could not be completed. In-app notifications remain active.
+                      </span>
+                    );
+                  }
+                  return null;
+                })()}
               </div>
             </CardContent>
           </Card>

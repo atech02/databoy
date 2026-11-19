@@ -59,3 +59,5 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false
+      - key: APP_PUBLIC_ORIGIN
+        value: https://databoy-aa871.web.app

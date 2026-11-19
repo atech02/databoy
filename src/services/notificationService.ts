@@ -46,6 +46,16 @@ export interface NotificationConfigStatus {
   };
 }
 
+import {
+  executePushRegistration,
+  PushRegistrationState,
+  PushEnableResult,
+  PushEnableDependencies,
+} from "@/utils/pushRegistration";
+
+export type { PushRegistrationState, PushEnableResult, PushEnableDependencies };
+export { executePushRegistration };
+
 export const notificationService = {
   /**
    * Fetches backend notification configuration, preferences, and registered push devices.
@@ -111,113 +121,74 @@ export const notificationService = {
   },
 
   /**
-   * Requests browser notification permission, obtains or generates an FCM device token,
-   * and registers it with the backend for the authenticated user.
+   * Returns current Web Push configuration & browser readiness state without requesting permission.
    */
-  async enablePushNotifications(): Promise<{
-    success: boolean;
-    token?: string;
-    deviceId?: string;
-    error?: string;
-  }> {
+  getPushReadinessState(isCurrentlyEnabled = false): {
+    state: PushRegistrationState | "ready";
+    vapidConfigured: boolean;
+    reason?: string;
+  } {
     const support = this.isBrowserPushSupported();
     if (!support.supported) {
+      return { state: "unsupported", vapidConfigured: false, reason: support.reason };
+    }
+    const vapidKey = (process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY || "").trim();
+    const vapidConfigured = vapidKey.length >= 20;
+    if (!vapidConfigured) {
       return {
-        success: false,
-        error: support.reason || "Push notifications are not supported on this browser/device.",
+        state: "configuration_missing",
+        vapidConfigured: false,
+        reason: "Web Push VAPID public key is not configured for this build. In-app notifications continue working.",
       };
     }
-
-    try {
-      const permission = await window.Notification.requestPermission();
-      if (permission !== "granted") {
-        return {
-          success: false,
-          error:
-            permission === "denied"
-              ? "Notification permission was denied in your browser settings. Please allow notifications for this site to enable push alerts."
-              : "Notification permission request was dismissed.",
-        };
-      }
-
-      let swReg = await navigator.serviceWorker.getRegistration("/sw.js");
-      if (!swReg) {
-        swReg = await navigator.serviceWorker.register("/sw.js");
-      }
-
-      let fcmToken = "";
-      const vapidKey = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY;
-
-      if (messaging) {
-        try {
-          const { getToken } = await import("firebase/messaging");
-          fcmToken = await getToken(messaging, {
-            serviceWorkerRegistration: swReg,
-            ...(vapidKey ? { vapidKey } : {}),
-          });
-        } catch (fcmErr: any) {
-          console.warn("[notificationService] FCM getToken warning:", fcmErr?.message || fcmErr);
-        }
-      }
-
-      if (!fcmToken) {
-        // Fallback: check PushManager subscription or generate deterministic device registration token
-        // when VAPID key is not yet provisioned in local dev
-        try {
-          const sub = await swReg.pushManager.getSubscription();
-          if (sub && sub.endpoint) {
-            fcmToken = sub.endpoint;
-          }
-        } catch {
-          // Ignore
-        }
-      }
-
-      if (!fcmToken) {
-        const existingLocal = window.localStorage.getItem(PUSH_TOKEN_STORAGE_KEY);
-        fcmToken =
-          existingLocal ||
-          `webpush_device_${
-            typeof crypto !== "undefined" && crypto.randomUUID
-              ? crypto.randomUUID()
-              : `${Date.now()}_${Math.random().toString(36).slice(2)}`
-          }`;
-      }
-
-      window.localStorage.setItem(PUSH_TOKEN_STORAGE_KEY, fcmToken);
-
-      const ua = window.navigator.userAgent;
-      const platform = /android/i.test(ua)
-        ? "Android"
-        : /ipad|iphone|ipod/i.test(ua)
-        ? "iOS / iPadOS"
-        : /windows/i.test(ua)
-        ? "Windows Desktop"
-        : /macintosh|mac os/i.test(ua)
-        ? "macOS Desktop"
-        : "Web Browser";
-
-      const res = await apiClient.post<{ success: boolean; deviceId: string }>(
-        "/api/notifications/push-tokens",
-        {
-          token: fcmToken,
-          deviceLabel: `${platform} (${window.location.hostname})`,
-          platform,
-          userAgent: ua,
-        }
-      );
-
+    if (support.permission === "denied") {
       return {
-        success: true,
-        token: fcmToken,
-        deviceId: res.deviceId,
-      };
-    } catch (err: any) {
-      return {
-        success: false,
-        error: err?.message || "Failed to enable push notifications.",
+        state: "permission_denied",
+        vapidConfigured: true,
+        reason: "Browser notification permission is denied. Allow notifications in site settings to enable push alerts.",
       };
     }
+    if (isCurrentlyEnabled) {
+      return { state: "enabled", vapidConfigured: true };
+    }
+    return { state: "ready", vapidConfigured: true };
+  },
+
+  /**
+   * Requests browser notification permission, obtains a genuine FCM device token via getToken(),
+   * and registers it with the backend for the authenticated user.
+   * Never fabricates synthetic tokens if VAPID is missing or Firebase getToken() fails.
+   */
+  async enablePushNotifications(): Promise<PushEnableResult> {
+    return executePushRegistration({
+      vapidKey: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
+      checkSupport: () => this.isBrowserPushSupported(),
+      requestPermission: () => window.Notification.requestPermission(),
+      getServiceWorkerRegistration: async () => {
+        const existing = await navigator.serviceWorker.getRegistration("/sw.js");
+        if (existing) return existing;
+        return navigator.serviceWorker.register("/sw.js");
+      },
+      acquireFcmToken: async (swReg, vapidKey) => {
+        if (!messaging) {
+          throw new Error("Firebase Cloud Messaging is not supported or initialized in this browser.");
+        }
+        const { getToken } = await import("firebase/messaging");
+        return getToken(messaging, {
+          serviceWorkerRegistration: swReg,
+          vapidKey,
+        });
+      },
+      registerTokenWithBackend: (payload) =>
+        apiClient.post<{ success: boolean; deviceId: string }>("/api/notifications/push-tokens", payload),
+      saveLocalToken: (token) => {
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem(PUSH_TOKEN_STORAGE_KEY, token);
+        }
+      },
+      userAgent: typeof window !== "undefined" ? window.navigator.userAgent : "",
+      hostname: typeof window !== "undefined" ? window.location.hostname : "databoy",
+    });
   },
 
   /**
@@ -227,7 +198,7 @@ export const notificationService = {
     let localToken: string | null = null;
     if (typeof window !== "undefined") {
       localToken = window.localStorage.getItem(PUSH_TOKEN_STORAGE_KEY);
-      if (messaging && localToken && !localToken.startsWith("webpush_device_")) {
+      if (messaging && localToken) {
         try {
           const { deleteToken } = await import("firebase/messaging");
           await deleteToken(messaging);

@@ -4,7 +4,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import Link from "next/link";
 import { useAuth } from "@/hooks/useAuth";
 import { userService } from "@/services/userService";
-import { notificationService, NotificationConfigStatus } from "@/services/notificationService";
+import { notificationService, NotificationConfigStatus, PushRegistrationState } from "@/services/notificationService";
 import { BackButton } from "@/components/ui/BackButton";
 import { Button } from "@/components/ui/Button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/Card";
@@ -103,6 +103,7 @@ export default function ProfilePage() {
   const [notifConfig, setNotifConfig] = useState<NotificationConfigStatus | null>(null);
   const [showPushExplainModal, setShowPushExplainModal] = useState(false);
   const [togglingPush, setTogglingPush] = useState(false);
+  const [pushState, setPushState] = useState<PushRegistrationState | null>(null);
 
   // Password reset confirmation dialog states (Phase 3)
   const [showPasswordResetModal, setShowPasswordResetModal] = useState(false);
@@ -404,7 +405,8 @@ export default function ProfilePage() {
 
     try {
       const result = await notificationService.enablePushNotifications();
-      if (!result.success) {
+      setPushState(result.state);
+      if (!result.success || result.state !== "enabled") {
         setError(result.error || "Could not enable push notifications on this device.");
         setPushNotifications(false);
       } else {
@@ -414,6 +416,8 @@ export default function ProfilePage() {
         setSuccess("Push notifications enabled and this device has been registered.");
       }
     } catch (err: any) {
+      setPushState("registration_failed");
+      setPushNotifications(false);
       setError(err?.message || "Failed to enable push notifications.");
     } finally {
       setTogglingPush(false);
@@ -952,18 +956,52 @@ export default function ProfilePage() {
                       size="sm"
                       onClick={handlePushToggleClick}
                       isLoading={togglingPush}
-                      disabled={!pushSupport.supported && !pushNotifications}
+                      disabled={
+                        (!pushSupport.supported ||
+                          notificationService.getPushReadinessState(pushNotifications).state ===
+                            "configuration_missing") &&
+                        !pushNotifications
+                      }
                       className="shrink-0 text-xs font-bold"
                     >
                       {pushNotifications ? "Disable Push" : "Enable Push"}
                     </Button>
                   </div>
 
-                  {!pushSupport.supported && (
-                    <span className="text-[11px] text-muted-foreground">
-                      ℹ️ {pushSupport.reason}
-                    </span>
-                  )}
+                  {(() => {
+                    const readiness = notificationService.getPushReadinessState(pushNotifications);
+                    const effectiveState = pushState || readiness.state;
+                    if (effectiveState === "enabled") return null;
+                    if (effectiveState === "unsupported") {
+                      return (
+                        <span className="text-[11px] text-muted-foreground">
+                          ℹ️ Status: <strong>unsupported</strong> — {pushSupport.reason}
+                        </span>
+                      );
+                    }
+                    if (effectiveState === "configuration_missing") {
+                      return (
+                        <span className="text-[11px] text-muted-foreground">
+                          ℹ️ Status: <strong>configuration_missing</strong> — {readiness.reason}
+                        </span>
+                      );
+                    }
+                    if (effectiveState === "permission_denied") {
+                      return (
+                        <span className="text-[11px] text-muted-foreground">
+                          ℹ️ Status: <strong>permission_denied</strong> — Browser notification permission is denied. In-app notifications remain active.
+                        </span>
+                      );
+                    }
+                    if (effectiveState === "registration_failed") {
+                      return (
+                        <span className="text-[11px] text-muted-foreground">
+                          ℹ️ Status: <strong>registration_failed</strong> — Device push registration could not be completed. In-app notifications remain active.
+                        </span>
+                      );
+                    }
+                    return null;
+                  })()}
                 </div>
 
                 <div className="pt-2 flex justify-end">

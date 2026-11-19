@@ -1,33 +1,15 @@
 import { Router } from "express";
-import { adminAuth, adminDb } from "../config/firebaseAdmin.js";
+import { adminDb } from "../config/firebaseAdmin.js";
 import { authMiddleware } from "../middleware/authMiddleware.js";
 import { requireRole } from "../middleware/roleGuard.js";
 import { logAuditEvent } from "../services/auditService.js";
 import { createNotification } from "../services/notificationService.js";
 import { ledgerService } from "../services/ledgerService.js";
 import { performanceService } from "../services/performanceService.js";
+import { computeAuthoritativeRoleClaims, reconcileUserClaimsFromFirestore, syncUserCustomClaims, } from "../services/customClaimsService.js";
 const router = Router();
 // All admin routes require admin role
 router.use(authMiddleware, requireRole("admin"));
-/**
- * Helper to synchronize Firebase Auth custom claims safely.
- * Returns success/error metadata so partial failures can be handled safely.
- */
-async function syncFirebaseCustomClaims(uid, claims) {
-    const isTestEnv = (process.env.NODE_ENV || "").trim().toLowerCase() === "test" ||
-        Boolean(process.env.FIRESTORE_EMULATOR_HOST?.trim());
-    try {
-        await adminAuth.setCustomUserClaims(uid, claims);
-        return { synced: true };
-    }
-    catch (err) {
-        if (isTestEnv) {
-            return { synced: false, skippedInTest: true };
-        }
-        console.error(`[AdminRoutes] Failed to synchronize Firebase Auth custom claims for ${uid}:`, err);
-        return { synced: false, error: err?.message || "Custom claim sync failed" };
-    }
-}
 /**
  * POST /api/admin/writers/:uid/approve
  * Admin approves a writer application, elevating their role to writer.
@@ -59,6 +41,27 @@ router.post("/writers/:uid/approve", async (req, res) => {
             }
             const previousStatus = currentData.verificationStatus || "draft";
             const previousRole = currentData.role || "customer";
+            const alreadyApprovedWithSameCaps = (currentData.role === "writer" || currentData.role === "proofreader") &&
+                currentData.status === "active" &&
+                currentData.writerStatus === "active" &&
+                currentData.verificationStatus === "approved" &&
+                currentData.isVerifiedWriter === true &&
+                Boolean(currentData.canProofread) === !!grantProofreading;
+            if (alreadyApprovedWithSameCaps) {
+                return {
+                    alreadyApproved: true,
+                    previousStatus,
+                    previousRole,
+                    previousWriterStatus: currentData.writerStatus || "active",
+                    previousIsVerifiedWriter: true,
+                    previousCanProofread: Boolean(currentData.canProofread),
+                    previousSpecialistCapabilities: Array.isArray(currentData.specialistCapabilities)
+                        ? currentData.specialistCapabilities
+                        : capabilities,
+                    previousStatusHistory: Array.isArray(currentData.statusHistory) ? currentData.statusHistory : [],
+                    previousVerifiedAt: currentData.verifiedAt || null,
+                };
+            }
             const performanceInit = {
                 reputation: currentData.reputation ?? 0,
                 writingRating: currentData.writingRating ?? 0,
@@ -97,38 +100,56 @@ router.post("/writers/:uid/approve", async (req, res) => {
                 specialistCapabilities: capabilities,
                 ...performanceInit,
                 statusHistory,
-                verifiedAt: now,
+                verifiedAt: currentData.verifiedAt || now,
                 updatedAt: now,
             });
             return {
+                alreadyApproved: false,
                 previousStatus,
                 previousRole,
                 previousWriterStatus: currentData.writerStatus || "inactive",
                 previousIsVerifiedWriter: Boolean(currentData.isVerifiedWriter),
                 previousCanProofread: Boolean(currentData.canProofread),
+                previousSpecialistCapabilities: Array.isArray(currentData.specialistCapabilities)
+                    ? currentData.specialistCapabilities
+                    : [],
                 previousStatusHistory: Array.isArray(currentData.statusHistory) ? currentData.statusHistory : [],
+                previousVerifiedAt: currentData.verifiedAt || null,
             };
         });
-        // Synchronize Firebase Authentication custom claims
-        const claimResult = await syncFirebaseCustomClaims(uid, {
+        // Synchronize Firebase Authentication custom claims (preserving unrelated existing claims)
+        const claimResult = await syncUserCustomClaims(uid, {
             role: "writer",
             isVerifiedWriter: true,
             canProofread: !!grantProofreading,
         });
-        // Partial failure safety: if custom-claim sync fails in production/staging, roll back Firestore authorization state
+        // Partial failure safety: fail closed and roll back Firestore state if claim sync fails
         if (!claimResult.synced && !claimResult.skippedInTest) {
-            await userRef.update({
-                role: txResult.previousRole,
-                writerStatus: txResult.previousWriterStatus,
-                verificationStatus: txResult.previousStatus,
-                isVerifiedWriter: txResult.previousIsVerifiedWriter,
-                canProofread: txResult.previousCanProofread,
-                statusHistory: txResult.previousStatusHistory,
-                updatedAt: new Date().toISOString(),
-            });
+            if (!txResult.alreadyApproved) {
+                await userRef.update({
+                    role: txResult.previousRole,
+                    writerStatus: txResult.previousWriterStatus,
+                    verificationStatus: txResult.previousStatus,
+                    isVerifiedWriter: txResult.previousIsVerifiedWriter,
+                    canProofread: txResult.previousCanProofread,
+                    specialistCapabilities: txResult.previousSpecialistCapabilities,
+                    statusHistory: txResult.previousStatusHistory,
+                    verifiedAt: txResult.previousVerifiedAt,
+                    updatedAt: new Date().toISOString(),
+                });
+            }
             res.status(502).json({
                 error: "Failed to synchronize Firebase Authentication custom claims; approval rolled back to maintain consistency.",
                 details: claimResult.error,
+            });
+            return;
+        }
+        if (txResult.alreadyApproved) {
+            res.status(200).json({
+                success: true,
+                alreadyApproved: true,
+                message: "Writer is already approved",
+                claimsSynced: claimResult.synced,
             });
             return;
         }
@@ -240,7 +261,8 @@ router.post("/writers/:uid/under-review", async (req, res) => {
 });
 /**
  * POST /api/admin/writers/:uid/reject
- * Admin rejects a writer application, preserving customer access.
+ * Admin rejects a writer application inside a Firestore transaction, preserving customer access,
+ * synchronizing Firebase Auth custom claims (preserving unrelated claims), and failing closed on sync failure.
  */
 router.post("/writers/:uid/reject", async (req, res) => {
     try {
@@ -249,47 +271,85 @@ router.post("/writers/:uid/reject", async (req, res) => {
         const user = req.user;
         const userRef = adminDb.collection("users").doc(uid);
         const now = new Date().toISOString();
-        const snap = await userRef.get();
-        if (!snap.exists) {
-            res.status(404).json({ error: "User not found" });
-            return;
-        }
-        const currentData = snap.data() || {};
         const rejectionReason = typeof reason === "string" && reason.trim() ? reason.trim() : "Did not meet criteria";
-        const prevRejections = Number(currentData.previousRejectionsCount || 0) + 1;
-        const statusHistory = Array.isArray(currentData.statusHistory) ? [...currentData.statusHistory] : [];
-        statusHistory.push({
-            status: "rejected",
-            actorId: user.uid,
-            actorName: user.email || "Administrator",
-            actorRole: "admin",
-            timestamp: now,
-            note: `Application rejected: ${rejectionReason}`,
+        const txResult = await adminDb.runTransaction(async (transaction) => {
+            const snap = await transaction.get(userRef);
+            if (!snap.exists) {
+                throw new Error("USER_NOT_FOUND");
+            }
+            const currentData = snap.data() || {};
+            if (currentData.role === "admin") {
+                throw new Error("CANNOT_MODIFY_ADMIN");
+            }
+            const prevRejections = Number(currentData.previousRejectionsCount || 0) + 1;
+            const statusHistory = Array.isArray(currentData.statusHistory) ? [...currentData.statusHistory] : [];
+            statusHistory.push({
+                status: "rejected",
+                actorId: user.uid,
+                actorName: user.email || "Administrator",
+                actorRole: "admin",
+                timestamp: now,
+                note: `Application rejected: ${rejectionReason}`,
+            });
+            transaction.update(userRef, {
+                role: "customer",
+                verificationStatus: "rejected",
+                writerStatus: "inactive",
+                isVerifiedWriter: false,
+                canProofread: false,
+                rejectionReason,
+                previousRejectionsCount: prevRejections,
+                statusHistory,
+                rejectedAt: now,
+                updatedAt: now,
+            });
+            return {
+                previousRole: currentData.role || "customer",
+                previousStatus: currentData.verificationStatus || "draft",
+                previousWriterStatus: currentData.writerStatus || "inactive",
+                previousIsVerifiedWriter: Boolean(currentData.isVerifiedWriter),
+                previousCanProofread: Boolean(currentData.canProofread),
+                previousRejectionReason: currentData.rejectionReason ?? null,
+                previousRejectionsCount: Number(currentData.previousRejectionsCount || 0),
+                previousStatusHistory: Array.isArray(currentData.statusHistory) ? currentData.statusHistory : [],
+                previousRejectedAt: currentData.rejectedAt ?? null,
+                nextRejectionsCount: prevRejections,
+            };
         });
-        // Preserve customer role if applicant was not an admin
-        const preservedRole = currentData.role === "admin" ? "admin" : "customer";
-        await userRef.update({
-            role: preservedRole,
-            verificationStatus: "rejected",
-            writerStatus: "inactive",
-            isVerifiedWriter: false,
-            rejectionReason,
-            previousRejectionsCount: prevRejections,
-            statusHistory,
-            rejectedAt: now,
-            updatedAt: now,
-        });
-        await syncFirebaseCustomClaims(uid, {
-            role: preservedRole,
+        const claimResult = await syncUserCustomClaims(uid, {
+            role: "customer",
             isVerifiedWriter: false,
             canProofread: false,
         });
+        if (!claimResult.synced && !claimResult.skippedInTest) {
+            await userRef.update({
+                role: txResult.previousRole,
+                verificationStatus: txResult.previousStatus,
+                writerStatus: txResult.previousWriterStatus,
+                isVerifiedWriter: txResult.previousIsVerifiedWriter,
+                canProofread: txResult.previousCanProofread,
+                rejectionReason: txResult.previousRejectionReason,
+                previousRejectionsCount: txResult.previousRejectionsCount,
+                statusHistory: txResult.previousStatusHistory,
+                rejectedAt: txResult.previousRejectedAt,
+                updatedAt: new Date().toISOString(),
+            });
+            res.status(502).json({
+                error: "Failed to synchronize Firebase Authentication custom claims; rejection rolled back to maintain consistency.",
+                details: claimResult.error,
+            });
+            return;
+        }
         await logAuditEvent({
             action: "writer_rejected",
             actorId: user.uid,
             actorRole: user.role,
             targetId: uid,
-            details: { reason: rejectionReason, previousRejectionsCount: prevRejections },
+            details: {
+                reason: rejectionReason,
+                previousRejectionsCount: txResult.nextRejectionsCount,
+                claimsSynced: claimResult.synced,
+            },
             ip: req.ip,
         });
         await createNotification({
@@ -302,9 +362,21 @@ router.post("/writers/:uid/reject", async (req, res) => {
             link: "/verification",
             essential: true,
         });
-        res.status(200).json({ success: true, message: "Writer application rejected" });
+        res.status(200).json({
+            success: true,
+            message: "Writer application rejected",
+            claimsSynced: claimResult.synced,
+        });
     }
     catch (err) {
+        if (err?.message === "USER_NOT_FOUND") {
+            res.status(404).json({ error: "User not found" });
+            return;
+        }
+        if (err?.message === "CANNOT_MODIFY_ADMIN") {
+            res.status(400).json({ error: "Cannot reject an administrator account via writer rejection" });
+            return;
+        }
         console.error("[AdminRoutes] Reject writer error:", err);
         res.status(500).json({ error: "Failed to reject writer application" });
     }
@@ -387,6 +459,8 @@ router.post("/users/:uid/activate", async (req, res) => {
 /**
  * POST /api/admin/users/:uid/role
  * Admin changes a user's role within the three-role domain model (customer, writer, admin).
+ * Synchronizes Firebase Auth custom claims (preserving unrelated claims) and never silently
+ * grants writer approval without existing verification approval. Fails closed on sync failure.
  */
 router.post("/users/:uid/role", async (req, res) => {
     try {
@@ -398,29 +472,130 @@ router.post("/users/:uid/role", async (req, res) => {
             return;
         }
         const userRef = adminDb.collection("users").doc(uid);
-        const snap = await userRef.get();
-        if (!snap.exists) {
-            res.status(404).json({ error: "User not found" });
+        const now = new Date().toISOString();
+        const txResult = await adminDb.runTransaction(async (transaction) => {
+            const snap = await transaction.get(userRef);
+            if (!snap.exists) {
+                throw new Error("USER_NOT_FOUND");
+            }
+            const currentData = snap.data() || {};
+            const nextUpdate = {
+                role,
+                updatedAt: now,
+            };
+            if (role === "customer") {
+                nextUpdate.isVerifiedWriter = false;
+                nextUpdate.writerStatus = "inactive";
+                nextUpdate.canProofread = false;
+            }
+            else if (role === "writer") {
+                // Never silently grant writer verification approval via a raw role change
+                const alreadyApproved = currentData.verificationStatus === "approved" && currentData.isVerifiedWriter === true;
+                if (!alreadyApproved) {
+                    nextUpdate.isVerifiedWriter = false;
+                    nextUpdate.writerStatus = "inactive";
+                    nextUpdate.canProofread = false;
+                }
+            }
+            const nextDocState = { ...currentData, ...nextUpdate };
+            const expectedClaims = computeAuthoritativeRoleClaims(nextDocState);
+            transaction.update(userRef, nextUpdate);
+            return {
+                previousRole: currentData.role || "customer",
+                previousIsVerifiedWriter: Boolean(currentData.isVerifiedWriter),
+                previousWriterStatus: currentData.writerStatus ?? null,
+                previousCanProofread: Boolean(currentData.canProofread),
+                expectedClaims,
+            };
+        });
+        const claimResult = await syncUserCustomClaims(uid, txResult.expectedClaims);
+        if (!claimResult.synced && !claimResult.skippedInTest) {
+            await userRef.update({
+                role: txResult.previousRole,
+                isVerifiedWriter: txResult.previousIsVerifiedWriter,
+                writerStatus: txResult.previousWriterStatus,
+                canProofread: txResult.previousCanProofread,
+                updatedAt: new Date().toISOString(),
+            });
+            res.status(502).json({
+                error: "Failed to synchronize Firebase Authentication custom claims; role change rolled back.",
+                details: claimResult.error,
+            });
             return;
         }
-        const now = new Date().toISOString();
-        await userRef.update({
-            role,
-            updatedAt: now,
-        });
         await logAuditEvent({
             action: "user_role_changed",
             actorId: user.uid,
             actorRole: user.role,
             targetId: uid,
-            details: { previousRole: snap.data()?.role || null, newRole: role },
+            details: {
+                previousRole: txResult.previousRole,
+                newRole: role,
+                expectedClaims: txResult.expectedClaims,
+                claimsSynced: claimResult.synced,
+            },
             ip: req.ip,
         });
-        res.status(200).json({ success: true, role, message: "User role updated" });
+        res.status(200).json({
+            success: true,
+            role,
+            claimsSynced: claimResult.synced,
+            expectedClaims: txResult.expectedClaims,
+            message: "User role updated",
+        });
     }
     catch (err) {
+        if (err?.message === "USER_NOT_FOUND") {
+            res.status(404).json({ error: "User not found" });
+            return;
+        }
         console.error("[AdminRoutes] Role change error:", err);
         res.status(500).json({ error: "Failed to change user role" });
+    }
+});
+/**
+ * POST /api/admin/users/:uid/reconcile-claims
+ * Reconciles Firebase Authentication custom claims from authoritative Firestore state
+ * without overwriting unrelated existing claims.
+ */
+router.post("/users/:uid/reconcile-claims", async (req, res) => {
+    try {
+        const uid = req.params.uid;
+        const user = req.user;
+        const result = await reconcileUserClaimsFromFirestore(uid);
+        if (!result.synced && !result.skippedInTest) {
+            res.status(502).json({
+                error: "Failed to reconcile Firebase Authentication custom claims.",
+                details: result.error,
+            });
+            return;
+        }
+        await logAuditEvent({
+            action: "user_claims_reconciled",
+            actorId: user.uid,
+            actorRole: user.role,
+            targetId: uid,
+            details: {
+                expectedClaims: result.expectedClaims,
+                preservedClaimKeys: result.preservedClaimKeys || [],
+                claimsSynced: result.synced,
+            },
+            ip: req.ip,
+        });
+        res.status(200).json({
+            success: true,
+            claimsSynced: result.synced,
+            expectedClaims: result.expectedClaims,
+            preservedClaimKeys: result.preservedClaimKeys || [],
+        });
+    }
+    catch (err) {
+        if (err?.message === "USER_NOT_FOUND") {
+            res.status(404).json({ error: "User not found" });
+            return;
+        }
+        console.error("[AdminRoutes] Reconcile claims error:", err);
+        res.status(500).json({ error: "Failed to reconcile custom claims" });
     }
 });
 /**

@@ -1,4 +1,5 @@
 import { adminAuth, adminDb } from "../config/firebaseAdmin.js";
+import { computeAuthoritativeRoleClaims } from "../services/customClaimsService.js";
 export async function authMiddleware(req, res, next) {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -33,22 +34,11 @@ export async function authMiddleware(req, res, next) {
             res.status(403).json({ error: "Account is suspended. Access denied." });
             return;
         }
-        const rawRole = userData.role || "customer";
-        // Authoritative 3-role mapping: proofreader legacy accounts map to writer
-        const role = rawRole === "admin" ? "admin" : rawRole === "writer" || rawRole === "proofreader" ? "writer" : "customer";
         const specialistCapabilities = Array.isArray(userData.specialistCapabilities)
             ? userData.specialistCapabilities
             : [];
-        const canProofread = rawRole === "proofreader" ||
-            userData.canProofread === true ||
-            specialistCapabilities.includes("proofreading");
-        const isUnverified = userData.isVerifiedWriter === false ||
-            ["pending_review", "under_review", "draft", "incomplete", "rejected", "clarification_required"].includes(userData.verificationStatus);
-        const isVerifiedWriter = role === "admin" ||
-            (!isUnverified &&
-                (userData.isVerifiedWriter === true ||
-                    userData.verificationStatus === "approved" ||
-                    userData.status === "active"));
+        const authoritativeClaims = computeAuthoritativeRoleClaims(userData);
+        const { role, canProofread, isVerifiedWriter } = authoritativeClaims;
         req.user = {
             uid,
             email,

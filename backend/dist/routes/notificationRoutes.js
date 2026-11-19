@@ -6,7 +6,13 @@ import { authMiddleware } from "../middleware/authMiddleware.js";
 import { logAuditEvent } from "../services/auditService.js";
 import { getEmailProviderConfig } from "../services/notificationService.js";
 const registerPushTokenSchema = z.object({
-    token: z.string().min(10).max(4096),
+    token: z
+        .string()
+        .min(10)
+        .max(4096)
+        .refine((val) => !val.trim().startsWith("webpush_device_"), {
+        message: "Synthetic device tokens are not accepted; a genuine FCM registration token is required.",
+    }),
     deviceLabel: z.string().max(120).optional(),
     platform: z.string().max(80).optional(),
     userAgent: z.string().max(500).optional(),
